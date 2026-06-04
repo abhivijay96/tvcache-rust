@@ -1,14 +1,11 @@
 #![allow(dead_code)]
 
-use std::{
-    collections::VecDeque,
-    net::TcpStream,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use crate::{tcg::ToolCallGraph, tvcache::TVCache};
 
-pub type StreamsSharedObject = Arc<Mutex<VecDeque<TcpStream>>>;
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
 

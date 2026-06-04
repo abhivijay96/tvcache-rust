@@ -1,9 +1,8 @@
 #![allow(dead_code)]
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
+
+use tokio::sync::Mutex;
 
 use crate::{tcg::ToolCallGraph, types::TcgSharedObject};
 
@@ -26,14 +25,26 @@ impl TVCache {
         )
     }
 
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        let mut result: HashMap<String, ToolCallGraph> = HashMap::new();
+    pub fn entries_snapshot(&self) -> Vec<(String, TcgSharedObject)> {
+        let mut result = Vec::<(String, TcgSharedObject)>::new();
 
-        for (task_id, tcg) in &self.tcgs {
-            let graph = tcg.lock().unwrap();
-            result.insert(task_id.clone(), graph.clone());
+        for (task_id, tcg_arc_object) in self.tcgs.iter() {
+            result.push((task_id.clone(), tcg_arc_object.clone()));
         }
 
-        serde_json::to_string_pretty(&result)
+        result
     }
+}
+
+pub async fn tcg_entries_to_json(
+    entries: Vec<(String, TcgSharedObject)>,
+) -> Result<String, serde_json::Error> {
+    let mut result: HashMap<String, ToolCallGraph> = HashMap::new();
+
+    for (task_id, tcg) in entries {
+        let graph = tcg.lock().await;
+        result.insert(task_id, graph.clone());
+    }
+
+    serde_json::to_string_pretty(&result)
 }
