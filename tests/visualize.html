@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TCG Visualizer</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    :root {
+      color: #111;
+      background: #f7f9f9;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: #111;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: 100vh;
+    }
+
+    aside {
+      border-right: 1px solid #cfd8d8;
+      background: #fff;
+      padding: 20px;
+    }
+
+    main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .brand {
+      margin: 0 0 18px;
+      font-size: 20px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #536161;
+    }
+
+    select,
+    textarea,
+    button {
+      width: 100%;
+      border: 1px solid #111;
+      background: #fff;
+      color: #111;
+      font: inherit;
+      min-height: 38px;
+      padding: 7px 10px;
+      border-radius: 4px;
+    }
+
+    textarea {
+      min-height: 112px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      text-transform: none;
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button:hover {
+      background: #e8f3f2;
+    }
+
+    .summary {
+      margin-top: 18px;
+      display: grid;
+      gap: 8px;
+      font-size: 13px;
+      color: #2d3838;
+    }
+
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #edf0f0;
+      padding-bottom: 6px;
+    }
+
+    .tool {
+      margin-top: 22px;
+      padding-top: 18px;
+      border-top: 1px solid #cfd8d8;
+      display: grid;
+      gap: 12px;
+    }
+
+    .tool h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .find-result {
+      border: 1px solid #111;
+      border-radius: 6px;
+      background: #f7f9f9;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .result-row {
+      display: grid;
+      gap: 3px;
+    }
+
+    .result-row strong {
+      color: #536161;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+
+    .result-row span {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .topbar {
+      min-width: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 16px 20px;
+      border-bottom: 1px solid #cfd8d8;
+      background: #0f766e;
+      color: #fff;
+    }
+
+    .topbar h1 {
+      min-width: 0;
+      margin: 0;
+      font-size: 18px;
+      font-weight: 760;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status {
+      font-size: 13px;
+      white-space: nowrap;
+      opacity: 0.95;
+    }
+
+    #chart {
+      width: 100%;
+      height: calc(100vh - 58px);
+      overflow: auto;
+      background:
+        linear-gradient(#eef3f3 1px, transparent 1px),
+        linear-gradient(90deg, #eef3f3 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+
+    .empty {
+      padding: 32px;
+      color: #536161;
+      font-size: 15px;
+    }
+
+    .link {
+      fill: none;
+      stroke: #111;
+      stroke-width: 1.5;
+    }
+
+    .node-card {
+      width: 100%;
+      height: 100%;
+      border: 1.5px solid #111;
+      background: #fff;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .node-header {
+      background: #0f766e;
+      color: #fff;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+      line-height: 1.25;
+      min-height: 38px;
+    }
+
+    .node-body {
+      display: grid;
+      gap: 6px;
+      align-content: start;
+      padding: 10px 12px 12px;
+      font-size: 12px;
+      line-height: 1.32;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .field {
+      display: block;
+      border-bottom: 1px solid #edf0f0;
+      padding-bottom: 6px;
+      align-items: start;
+    }
+
+    .field span:first-child {
+      display: block;
+      margin-bottom: 2px;
+      color: #536161;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .field span:last-child {
+      display: block;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 760px) {
+      .app {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+
+      aside {
+        border-right: 0;
+        border-bottom: 1px solid #cfd8d8;
+      }
+
+      #chart {
+        height: 70vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h2 class="brand">TCG Visualizer</h2>
+      <div class="controls">
+        <label>
+          Task
+          <select id="taskSelect"></select>
+        </label>
+        <button id="refreshButton" type="button">Refresh</button>
+      </div>
+      <div class="summary">
+        <div class="summary-row"><strong>Nodes</strong><span id="nodeCount">0</span></div>
+        <div class="summary-row"><strong>Envs</strong><span id="envCount">0</span></div>
+        <div class="summary-row"><strong>Tasks</strong><span id="taskCount">0</span></div>
+      </div>
+      <form id="findForm" class="tool">
+        <h3>Find</h3>
+        <label>
+          Path JSON
+          <textarea id="findPathInput" spellcheck="false" placeholder='["tool\nparent", "git\nstatus"]'></textarea>
+        </label>
+        <button id="findButton" type="submit">Find Path</button>
+        <div id="findResult" class="find-result">
+          <div class="result-row"><strong>Status</strong><span>Select a task and enter a path JSON array.</span></div>
+        </div>
+      </form>
+    </aside>
+    <main>
+      <div class="topbar">
+        <h1 id="title">No TCG selected</h1>
+        <div id="status" class="status">Loading</div>
+      </div>
+      <div id="chart"></div>
+    </main>
+  </div>
+
+  <script>
+    const taskSelect = document.getElementById("taskSelect");
+    const refreshButton = document.getElementById("refreshButton");
+    const findForm = document.getElementById("findForm");
+    const findPathInput = document.getElementById("findPathInput");
+    const findResult = document.getElementById("findResult");
+    const chart = document.getElementById("chart");
+    const statusEl = document.getElementById("status");
+    const titleEl = document.getElementById("title");
+    const nodeCountEl = document.getElementById("nodeCount");
+    const envCountEl = document.getElementById("envCount");
+    const taskCountEl = document.getElementById("taskCount");
+
+    let tvcache = {};
+
+    function display(value) {
+      if (value === null || value === undefined) {
+        return "null";
+      }
+      if (typeof value === "string" && value.length === 0) {
+        return "(empty string)";
+      }
+      return String(value);
+    }
+
+    function toTreeNode(key, node, path) {
+      const childrenMap = node.children || {};
+      const children = Object.entries(childrenMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([childKey, childNode]) => toTreeNode(childKey, childNode, path.concat(childKey)));
+
+      return {
+        key,
+        path,
+        value: node.value ?? null,
+        sandbox_id: node.sandbox_id ?? null,
+        runtime: node.runtime ?? 0,
+        child_count: children.length,
+        children
+      };
+    }
+
+    function selectedTaskId() {
+      return taskSelect.value || "";
+    }
+
+    async function loadCache() {
+      statusEl.textContent = "Loading";
+      const response = await fetch("/api/tvcache");
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "failed to load tvcache");
+      }
+
+      tvcache = payload;
+      renderTaskOptions();
+      renderSelectedTask();
+      statusEl.textContent = "Loaded";
+    }
+
+    function renderTaskOptions() {
+      const previous = selectedTaskId();
+      const taskIds = Object.keys(tvcache).sort();
+      taskSelect.innerHTML = "";
+
+      for (const taskId of taskIds) {
+        const option = document.createElement("option");
+        option.value = taskId;
+        option.textContent = taskId;
+        taskSelect.appendChild(option);
+      }
+
+      if (taskIds.includes(previous)) {
+        taskSelect.value = previous;
+      }
+
+      taskCountEl.textContent = String(taskIds.length);
+    }
+
+    function renderSelectedTask() {
+      const taskId = selectedTaskId();
+      const graph = tvcache[taskId];
+      chart.innerHTML = "";
+
+      if (!taskId || !graph) {
+        titleEl.textContent = "No TCG selected";
+        nodeCountEl.textContent = "0";
+        envCountEl.textContent = "0";
+        chart.innerHTML = "<div class='empty'>No TCGs are currently available.</div>";
+        return;
+      }
+
+      titleEl.textContent = taskId;
+      nodeCountEl.textContent = String(graph.number_of_nodes ?? 0);
+      envCountEl.textContent = String(graph.number_of_envs ?? 0);
+
+      if (!window.d3) {
+        statusEl.textContent = "Error";
+        chart.innerHTML = "<div class='empty'>D3.js did not load. Check your browser network access to cdn.jsdelivr.net.</div>";
+        return;
+      }
+
+      const root = d3.hierarchy(toTreeNode("root", graph.root || {}, []));
+      const nodeWidth = 320;
+      const nodeHeight = 220;
+      const horizontalGap = 56;
+      const verticalGap = 92;
+      const margin = { top: 28, right: 48, bottom: 48, left: 48 };
+
+      d3.tree().nodeSize([nodeWidth + horizontalGap, nodeHeight + verticalGap])(root);
+
+      const nodes = root.descendants();
+      const minX = d3.min(nodes, d => d.x) ?? 0;
+      const maxX = d3.max(nodes, d => d.x) ?? 0;
+      const maxY = d3.max(nodes, d => d.y) ?? 0;
+      const width = Math.max(
+        chart.clientWidth,
+        maxX - minX + margin.left + margin.right + nodeWidth
+      );
+      const height = Math.max(
+        chart.clientHeight,
+        maxY + margin.top + margin.bottom + nodeHeight
+      );
+      const xOffset = margin.left - minX;
+
+      const svg = d3.select(chart)
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .style("cursor", "grab");
+
+      const zoomLayer = svg.append("g");
+      const group = zoomLayer.append("g")
+        .attr("transform", `translate(${xOffset},${margin.top})`);
+
+      svg.call(
+        d3.zoom()
+          .scaleExtent([0.2, 3])
+          .on("zoom", event => {
+            zoomLayer.attr("transform", event.transform);
+          })
+      );
+
+      svg.on("mousedown", () => svg.style("cursor", "grabbing"));
+      svg.on("mouseup mouseleave", () => svg.style("cursor", "grab"));
+
+      group.selectAll("path.link")
+        .data(root.links())
+        .join("path")
+        .attr("class", "link")
+        .attr("d", d3.linkVertical()
+          .x(d => d.x + nodeWidth / 2)
+          .y(d => d.y + nodeHeight / 2));
+
+      group.selectAll("g.node")
+        .data(nodes)
+        .join("g")
+        .attr("transform", d => `translate(${d.x},${d.y})`)
+        .append("foreignObject")
+        .attr("width", nodeWidth)
+        .attr("height", nodeHeight)
+        .append("xhtml:div")
+        .attr("class", "node-card")
+        .html(d => {
+          const data = d.data;
+          return `
+          <div class="node-header">${escapeHtml(data.key)}</div>
+          <div class="node-body">
+            <div class="field"><span>value</span><span>${escapeHtml(display(data.value))}</span></div>
+            <div class="field"><span>sandbox</span><span>${escapeHtml(display(data.sandbox_id))}</span></div>
+            <div class="field"><span>runtime</span><span>${escapeHtml(display(data.runtime))}</span></div>
+            <div class="field"><span>children</span><span>${escapeHtml(display(data.child_count))}</span></div>
+          </div>
+        `;
+        });
+    }
+
+    function parseFindPath() {
+      const parsed = JSON.parse(findPathInput.value);
+      if (!Array.isArray(parsed) || !parsed.every(entry => typeof entry === "string")) {
+        throw new Error("Path must be a JSON array of strings.");
+      }
+      return parsed;
+    }
+
+    function renderFindResult(payload) {
+      if (payload.error) {
+        findResult.innerHTML = `
+          <div class="result-row"><strong>Status</strong><span>${escapeHtml(payload.error)}</span></div>
+        `;
+        return;
+      }
+
+      const sandboxPath = Array.isArray(payload.sandbox_path)
+        ? JSON.stringify(payload.sandbox_path)
+        : display(payload.sandbox_path);
+
+      findResult.innerHTML = `
+        <div class="result-row"><strong>Value</strong><span>${escapeHtml(display(payload.value))}</span></div>
+        <div class="result-row"><strong>Sandbox Path</strong><span>${escapeHtml(sandboxPath)}</span></div>
+        <div class="result-row"><strong>Sandbox ID</strong><span>${escapeHtml(display(payload.sandbox_id))}</span></div>
+      `;
+    }
+
+    async function runFind() {
+      const taskId = selectedTaskId();
+      if (!taskId) {
+        throw new Error("Select a task before calling find.");
+      }
+
+      const path = parseFindPath();
+      findResult.innerHTML = `
+        <div class="result-row"><strong>Status</strong><span>Finding...</span></div>
+      `;
+
+      const response = await fetch("/api/find", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: taskId, path })
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "find request failed");
+      }
+      renderFindResult(payload);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    refreshButton.addEventListener("click", () => {
+      loadCache().catch(error => {
+        statusEl.textContent = "Error";
+        chart.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+      });
+    });
+
+    taskSelect.addEventListener("change", renderSelectedTask);
+
+    findForm.addEventListener("submit", event => {
+      event.preventDefault();
+      runFind().catch(error => {
+        findResult.innerHTML = `
+          <div class="result-row"><strong>Error</strong><span>${escapeHtml(error.message)}</span></div>
+        `;
+      });
+    });
+
+    loadCache().catch(error => {
+      statusEl.textContent = "Error";
+      chart.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    });
+  </script>
+</body>
+</html>

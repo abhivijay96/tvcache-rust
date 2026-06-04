@@ -1,0 +1,7 @@
+[project]
+name = "hello-rust-tests"
+version = "0.1.0"
+description = "Python protocol tests and visualizer for the hello-rust TCP cache server"
+requires-python = ">=3.11"
+dependencies = []
+
