@@ -3,7 +3,7 @@
 Start the Rust server in one terminal:
 
 ```sh
-NUM_THREADS=4 cargo run
+cargo run
 ```
 
 Run the Python client in another terminal:
@@ -46,17 +46,15 @@ The script prints each decoded response and exits with an assertion error if the
 
 `cache_client.py` contains the reusable TCP protocol client used by `test_client.py`, `load_test.py`, and `visualize.py`.
 
-The load test creates 32 task ids by default. For each task it builds a valid TCG with depth 5, inserting parents before children, and randomly creates 1-8 children per node at each depth. It also samples leaf paths and calls `FIND` to verify inserted values. After the dataset is created, it runs parallel `FIND` batches at concurrency 32, 64, and 128 and logs mean, median, and p95 response completion times.
-
-Dataset creation uses fewer workers than the find benchmark by default. Each request opens a short-lived TCP connection, so building the dataset with too many workers can exhaust local ephemeral ports before the benchmark starts.
+The load test creates `--num-tasks` TCGs, depth 5 by default. For each task it builds a valid TCG by inserting parents before children, with random width 1-8 at each parent. Dataset creation reuses one socket per task. After the dataset is created, it runs one find phase for each value in `--num-rollouts`. Each phase starts `num_tasks * num_rollouts` parallel find workers. Each find worker opens one socket and performs one random valid `FIND` for its designated task. The script logs mean, median, and p95 response completion times.
 
 Useful load-test options:
 
 ```sh
-uv run load_test.py --seed 99 --workers 8
-uv run load_test.py --tasks 8 --depth 4 --children-max 4
-uv run load_test.py --find-concurrency 32,64,128
-uv run load_test.py --workers 4 --insert-delay 0.001
+uv run load_test.py --num-tasks 32 --num-rollouts 4
+uv run load_test.py --num-tasks 32 --num-rollouts 1,2,4,8
+uv run load_test.py --num-tasks 8 --num-rollouts 2 --depth 4
+uv run load_test.py --build-workers 4
 uv run load_test.py --timeout 30 --retries 5 --retry-backoff 0.1
 ```
 

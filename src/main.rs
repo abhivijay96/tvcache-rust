@@ -8,7 +8,7 @@ use std::io;
 use std::sync::Arc;
 
 use request_handler::RequestHandler;
-use tokio::{net::{TcpListener}, sync::Mutex};
+use tokio::{net::TcpListener, sync::Mutex};
 use tvcache::TVCache;
 use types::CacheSharedObject;
 

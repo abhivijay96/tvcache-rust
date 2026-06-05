@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-
-use std::io;
+use std::{io};
 
 use tokio::net::TcpStream;
 
@@ -19,7 +17,7 @@ impl RequestHandler {
         return Self { cache: cache };
     }
 
-    pub async fn handle_stream(&mut self, mut stream: TcpStream) {
+    pub async fn handle_stream(&self, mut stream: TcpStream) {
         loop {
             match self.parse_request(&mut stream).await {
                 Ok(request) => {
@@ -30,14 +28,13 @@ impl RequestHandler {
                 }
                 Err(_err) => {
                     // println!("Error while handling stream: {err}");
-                    break
+                    break;
                 }
             }
         }
-        
     }
 
-    async fn parse_request(&mut self, stream: &mut TcpStream) -> Result<Request, io::Error> {
+    async fn parse_request(&self, stream: &mut TcpStream) -> Result<Request, io::Error> {
         let request_type = protocol_primitives::read_u8(stream).await?;
 
         match request_type {
@@ -97,7 +94,7 @@ impl RequestHandler {
         }
     }
 
-    async fn execute_request(&mut self, request: Request) -> Response {
+    async fn execute_request(&self, request: Request) -> Response {
         match request {
             Request::Insert {
                 task_id,
@@ -157,7 +154,7 @@ impl RequestHandler {
     }
 
     async fn write_response(
-        &mut self,
+        &self,
         stream: &mut TcpStream,
         response: Response,
     ) -> Result<(), io::Error> {

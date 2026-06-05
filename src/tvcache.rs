@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::Mutex;

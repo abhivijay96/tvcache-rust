@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import asyncio
 import json
 import socket
 import struct
@@ -233,3 +234,231 @@ class CacheClient:
         if response["type"] != "json":
             raise RuntimeError(f"expected json response, got {response['type']}")
         return json.loads(response["json"])
+
+
+@dataclass
+class PersistentCacheClient:
+    host: str = "127.0.0.1"
+    port: int = 7878
+    timeout: float = 5
+    retries: int = 3
+    retry_backoff: float = 0.05
+    sock: socket.socket | None = None
+
+    def __enter__(self) -> "PersistentCacheClient":
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def connect(self) -> None:
+        last_error: OSError | None = None
+
+        for attempt in range(self.retries + 1):
+            try:
+                self.sock = socket.create_connection(
+                    (self.host, self.port), timeout=self.timeout
+                )
+                self.sock.settimeout(self.timeout)
+                return
+            except OSError as error:
+                last_error = error
+                if attempt == self.retries:
+                    break
+                time.sleep(self.retry_backoff * (attempt + 1))
+
+        assert last_error is not None
+        raise last_error
+
+    def close(self) -> None:
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
+
+    def send_request(self, request: bytes) -> dict[str, Any]:
+        if self.sock is None:
+            raise RuntimeError("persistent cache client is not connected")
+
+        self.sock.sendall(request)
+        return decode_response(self.sock)
+
+    def insert(
+        self,
+        task_id: str,
+        path: list[str],
+        value: str | None,
+        sandbox_id: str | None,
+        runtime: int,
+    ) -> dict[str, Any]:
+        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime))
+
+    def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return self.send_request(encode_find(task_id, path))
+
+    def dump_all_response(self) -> dict[str, Any]:
+        return self.send_request(encode_dump_all())
+
+
+async def async_read_u8(reader: asyncio.StreamReader) -> int:
+    return struct.unpack(">B", await reader.readexactly(1))[0]
+
+
+async def async_read_bool(reader: asyncio.StreamReader) -> bool:
+    value = await async_read_u8(reader)
+    if value == 0:
+        return False
+    if value == 1:
+        return True
+    raise ValueError(f"invalid bool byte: {value}")
+
+
+async def async_read_u16(reader: asyncio.StreamReader) -> int:
+    return struct.unpack(">H", await reader.readexactly(2))[0]
+
+
+async def async_read_u32(reader: asyncio.StreamReader) -> int:
+    return struct.unpack(">I", await reader.readexactly(4))[0]
+
+
+async def async_read_string_u16(reader: asyncio.StreamReader) -> str:
+    return (await reader.readexactly(await async_read_u16(reader))).decode("utf-8")
+
+
+async def async_read_string_u32(reader: asyncio.StreamReader) -> str:
+    return (await reader.readexactly(await async_read_u32(reader))).decode("utf-8")
+
+
+async def async_read_path(reader: asyncio.StreamReader) -> list[str]:
+    count = await async_read_u16(reader)
+    return [await async_read_string_u16(reader) for _ in range(count)]
+
+
+async def async_read_optional_string_u16(
+    reader: asyncio.StreamReader,
+) -> str | None:
+    if await async_read_bool(reader):
+        return await async_read_string_u16(reader)
+    return None
+
+
+async def async_read_optional_string_u32(
+    reader: asyncio.StreamReader,
+) -> str | None:
+    if await async_read_bool(reader):
+        return await async_read_string_u32(reader)
+    return None
+
+
+async def async_read_optional_path(
+    reader: asyncio.StreamReader,
+) -> list[str] | None:
+    if await async_read_bool(reader):
+        return await async_read_path(reader)
+    return None
+
+
+async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
+    response_type = await async_read_u8(reader)
+
+    if response_type == INSERT_RESULT_RESPONSE:
+        return {
+            "type": "insert_result",
+            "value_inserted": await async_read_bool(reader),
+            "sandbox_inserted": await async_read_bool(reader),
+        }
+
+    if response_type == FIND_RESULT_RESPONSE:
+        return {
+            "type": "find_result",
+            "value": await async_read_optional_string_u32(reader),
+            "sandbox_path": await async_read_optional_path(reader),
+            "sandbox_id": await async_read_optional_string_u16(reader),
+        }
+
+    if response_type == ERROR_RESPONSE:
+        return {
+            "type": "error",
+            "message": await async_read_string_u32(reader),
+        }
+
+    if response_type == JSON_RESPONSE:
+        return {
+            "type": "json",
+            "json": await async_read_string_u32(reader),
+        }
+
+    raise ValueError(f"unknown response type: {response_type}")
+
+
+@dataclass
+class AsyncPersistentCacheClient:
+    host: str = "127.0.0.1"
+    port: int = 7878
+    timeout: float = 5
+    retries: int = 3
+    retry_backoff: float = 0.05
+    reader: asyncio.StreamReader | None = None
+    writer: asyncio.StreamWriter | None = None
+
+    async def __aenter__(self) -> "AsyncPersistentCacheClient":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        await self.close()
+
+    async def connect(self) -> None:
+        last_error: OSError | TimeoutError | None = None
+
+        for attempt in range(self.retries + 1):
+            try:
+                self.reader, self.writer = await asyncio.wait_for(
+                    asyncio.open_connection(self.host, self.port),
+                    timeout=self.timeout,
+                )
+                return
+            except (OSError, TimeoutError) as error:
+                last_error = error
+                if attempt == self.retries:
+                    break
+                await asyncio.sleep(self.retry_backoff * (attempt + 1))
+
+        assert last_error is not None
+        raise last_error
+
+    async def close(self) -> None:
+        if self.writer is not None:
+            self.writer.close()
+            await self.writer.wait_closed()
+            self.reader = None
+            self.writer = None
+
+    async def send_request(self, request: bytes) -> dict[str, Any]:
+        if self.reader is None or self.writer is None:
+            raise RuntimeError("async persistent cache client is not connected")
+
+        self.writer.write(request)
+        await asyncio.wait_for(self.writer.drain(), timeout=self.timeout)
+        return await asyncio.wait_for(
+            async_decode_response(self.reader),
+            timeout=self.timeout,
+        )
+
+    async def insert(
+        self,
+        task_id: str,
+        path: list[str],
+        value: str | None,
+        sandbox_id: str | None,
+        runtime: int,
+    ) -> dict[str, Any]:
+        return await self.send_request(
+            encode_insert(task_id, path, value, sandbox_id, runtime)
+        )
+
+    async def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return await self.send_request(encode_find(task_id, path))
+
+    async def dump_all_response(self) -> dict[str, Any]:
+        return await self.send_request(encode_dump_all())
