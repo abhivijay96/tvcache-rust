@@ -2,11 +2,17 @@ use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::Mutex;
 
-use crate::{tcg::ToolCallGraph, types::TcgSharedObject};
+use crate::{eviction::EvictionPolicyConfig, tcg::ToolCallGraph, types::TcgSharedObject};
 
 #[derive(Debug, Default)]
 pub struct TVCache {
     pub tcgs: HashMap<String, TcgSharedObject>,
+    eviction_policy: EvictionPolicyConfig,
+}
+
+pub struct EvictionEntriesSnapshot {
+    pub policy: EvictionPolicyConfig,
+    pub entries: Vec<(String, TcgSharedObject)>,
 }
 
 impl TVCache {
@@ -23,6 +29,10 @@ impl TVCache {
         )
     }
 
+    pub fn set_eviction_policy(&mut self, policy: EvictionPolicyConfig) {
+        self.eviction_policy = policy;
+    }
+
     pub fn entries_snapshot(&self) -> Vec<(String, TcgSharedObject)> {
         let mut result = Vec::<(String, TcgSharedObject)>::new();
 
@@ -31,6 +41,13 @@ impl TVCache {
         }
 
         result
+    }
+
+    pub fn eviction_entries_snapshot(&self) -> EvictionEntriesSnapshot {
+        EvictionEntriesSnapshot {
+            policy: self.eviction_policy.clone(),
+            entries: self.entries_snapshot(),
+        }
     }
 }
 

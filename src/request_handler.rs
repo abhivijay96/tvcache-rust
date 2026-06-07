@@ -141,7 +141,7 @@ impl RequestHandler {
                 };
 
                 let (value, (sandbox_path, sandbox_id)) = {
-                    let tcg = tcg.lock().await;
+                    let mut tcg = tcg.lock().await;
                     tcg.find(path)
                 };
 

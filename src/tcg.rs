@@ -2,6 +2,7 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use serde::Serialize;
 
+use crate::eviction::EvictionResult;
 use crate::utils;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -13,6 +14,7 @@ pub struct Node {
     pub ttl_present: bool,
     pub ttl: u32, // seconds
     pub inserted_at_seconds: u64,
+    pub number_of_hits: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -87,12 +89,12 @@ impl ToolCallGraph {
     }
 
     pub fn find(
-        &self,
+        &mut self,
         path: Vec<String>,
     ) -> (Option<String>, (Option<Vec<String>>, Option<String>)) {
         // this function tries to find the exact path in the tcg and return the value of the last node or return the longest prefix match with a sandbox id
 
-        let mut curr: &Node = &self.root;
+        let mut curr = &mut self.root;
         let mut curr_path: Vec<String> = Vec::new();
         let mut sandbox_path: Option<Vec<String>> = None;
         let mut sandbox_id: Option<String> = None;
@@ -104,7 +106,7 @@ impl ToolCallGraph {
         }
 
         for p in path {
-            if let Some(next) = curr.children.get(&p) {
+            if let Some(next) = curr.children.get_mut(&p) {
                 curr_path.push(p);
                 curr = next;
 
@@ -114,6 +116,7 @@ impl ToolCallGraph {
                 }
 
                 if curr_path.len() == path_len {
+                    curr.number_of_hits += 1;
                     value_of_path = curr.value.clone();
                 }
             } else {
@@ -124,6 +127,11 @@ impl ToolCallGraph {
 
         return (value_of_path, (sandbox_path, sandbox_id));
     }
+
+    pub fn prune_expired(&mut self, _now_seconds: u64) -> EvictionResult {
+        EvictionResult::default()
+    }
 }
 
 // TODO: Write TTL and then pruning logic and persistence
+// also If I have returned a sandbox id during insertion, I want to be able to prevent from removing that sandbox because someone might be copying the sandbox. also I want to maintain an evicted sandbox id list
