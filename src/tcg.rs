@@ -66,7 +66,10 @@ impl ToolCallGraph {
 
                 if let Some(ttl_value) = ttl {
                     // assert that ttl_present is true
-                    assert!(new_node.ttl_present,"ttl_present should be true when ttl has a value");
+                    assert!(
+                        new_node.ttl_present,
+                        "ttl_present should be true when ttl has a value"
+                    );
                     new_node.ttl = ttl_value;
                 }
 
