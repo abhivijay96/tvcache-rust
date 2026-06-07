@@ -31,10 +31,6 @@ def write_u16(value: int) -> bytes:
     return struct.pack(">H", value)
 
 
-def write_i16(value: int) -> bytes:
-    return struct.pack(">h", value)
-
-
 def write_u32(value: int) -> bytes:
     return struct.pack(">I", value)
 
@@ -62,11 +58,12 @@ def encode_insert(
     value: str | None,
     sandbox_id: str | None,
     runtime: int,
+    ttl: int | None = None,
 ) -> bytes:
     encoded = write_u8(INSERT_REQUEST)
     encoded += write_string_u16(task_id)
     encoded += write_path(path)
-    encoded += write_i16(runtime)
+    encoded += write_u16(runtime)
 
     encoded += write_bool(value is not None)
     if value is not None:
@@ -75,6 +72,10 @@ def encode_insert(
     encoded += write_bool(sandbox_id is not None)
     if sandbox_id is not None:
         encoded += write_string_u16(sandbox_id)
+
+    encoded += write_bool(ttl is not None)
+    if ttl is not None:
+        encoded += write_u32(ttl)
 
     return encoded
 
@@ -218,8 +219,9 @@ class CacheClient:
         value: str | None,
         sandbox_id: str | None,
         runtime: int,
+        ttl: int | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime))
+        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -290,8 +292,9 @@ class PersistentCacheClient:
         value: str | None,
         sandbox_id: str | None,
         runtime: int,
+        ttl: int | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime))
+        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -452,9 +455,10 @@ class AsyncPersistentCacheClient:
         value: str | None,
         sandbox_id: str | None,
         runtime: int,
+        ttl: int | None = None,
     ) -> dict[str, Any]:
         return await self.send_request(
-            encode_insert(task_id, path, value, sandbox_id, runtime)
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl)
         )
 
     async def find(self, task_id: str, path: list[str]) -> dict[str, Any]:

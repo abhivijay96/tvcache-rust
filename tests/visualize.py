@@ -26,9 +26,9 @@ def make_handler(rust_host: str, rust_port: int) -> type[BaseHTTPRequestHandler]
                 try:
                     payload = client.dump_all()
                     task_ids = sorted(payload.keys()) if isinstance(payload, dict) else []
-                    print("Received TVCache from Rust:")
-                    print(f"  task_ids: {task_ids}")
-                    print(json.dumps(payload))
+                    # print("Received TVCache from Rust:")
+                    # print(f"  task_ids: {task_ids}")
+                    # print(json.dumps(payload))
                     self.send_json(payload, status=200)
                 except Exception as error:
                     self.send_json({"error": str(error)}, status=502)

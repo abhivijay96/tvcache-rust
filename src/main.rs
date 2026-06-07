@@ -3,6 +3,7 @@ mod request_handler;
 mod tcg;
 mod tvcache;
 mod types;
+mod utils;
 
 use std::io;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ async fn main() -> io::Result<()> {
                 let stream = tcp_stream;
 
                 tokio::spawn(async move {
-                    let mut request_handler = RequestHandler::new(cache_shared_object);
+                    let request_handler = RequestHandler::new(cache_shared_object);
                     request_handler.handle_stream(stream).await;
                 });
             }

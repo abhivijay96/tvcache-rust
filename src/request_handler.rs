@@ -1,4 +1,4 @@
-use std::{io};
+use std::io;
 
 use tokio::net::TcpStream;
 
@@ -43,8 +43,9 @@ impl RequestHandler {
                 let path = protocol_primitives::read_path(stream).await?;
                 let mut value = None;
                 let mut sandbox_id = None;
+                let mut ttl: Option<u32> = None;
 
-                let runtime = protocol_primitives::read_i16(stream).await?;
+                let runtime = protocol_primitives::read_u16(stream).await?;
 
                 let value_exists = protocol_primitives::read_u8(stream).await?;
 
@@ -69,12 +70,25 @@ impl RequestHandler {
                     ));
                 }
 
+                let ttl_exists = protocol_primitives::read_u8(stream).await?;
+
+                if ttl_exists == 1 {
+                    ttl = Some(protocol_primitives::read_u32(stream).await?);
+                } else if ttl_exists != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid ttl exists flag: {ttl_exists}"),
+                    ));
+                }
+
                 Ok(Request::Insert {
                     task_id,
                     path,
                     value,
                     sandbox_id,
                     runtime,
+                    ttl,
+                    ttl_present: ttl_exists == 1,
                 })
             }
 
@@ -102,6 +116,8 @@ impl RequestHandler {
                 value,
                 sandbox_id,
                 runtime,
+                ttl_present,
+                ttl,
             } => {
                 let tcg = {
                     let mut cache = self.cache.lock().await;
@@ -110,7 +126,7 @@ impl RequestHandler {
 
                 let (value_inserted, sandbox_inserted) = {
                     let mut tcg = tcg.lock().await;
-                    tcg.insert(path, value, sandbox_id, runtime)
+                    tcg.insert(path, value, sandbox_id, runtime, ttl, ttl_present)
                 };
 
                 Response::InsertResult {

@@ -13,7 +13,9 @@ pub enum Request {
         path: Vec<String>,
         value: Option<String>,
         sandbox_id: Option<String>,
-        runtime: i16,
+        runtime: u16,
+        ttl: Option<u32>,
+        ttl_present: bool,
     },
     Find {
         task_id: String,

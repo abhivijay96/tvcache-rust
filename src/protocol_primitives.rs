@@ -17,12 +17,6 @@ pub async fn read_u16(stream: &mut TcpStream) -> Result<u16, io::Error> {
     Ok(u16::from_be_bytes(buffer))
 }
 
-pub async fn read_i16(stream: &mut TcpStream) -> Result<i16, io::Error> {
-    let mut buffer = [0; 2];
-    stream.read_exact(&mut buffer).await?;
-    Ok(i16::from_be_bytes(buffer))
-}
-
 pub async fn read_u32(stream: &mut TcpStream) -> Result<u32, io::Error> {
     let mut buffer = [0; 4];
     stream.read_exact(&mut buffer).await?;

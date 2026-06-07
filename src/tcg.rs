@@ -2,12 +2,17 @@ use std::collections::{hash_map::Entry, HashMap};
 
 use serde::Serialize;
 
+use crate::utils;
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Node {
     pub children: HashMap<String, Node>,
     pub sandbox_id: Option<String>,
     pub value: Option<String>,
-    pub runtime: i16,
+    pub runtime: u16,
+    pub ttl_present: bool,
+    pub ttl: u32, // seconds
+    pub inserted_at_seconds: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -27,7 +32,9 @@ impl ToolCallGraph {
         path: Vec<String>,
         value: Option<String>,
         sandbox_id: Option<String>,
-        runtime: i16,
+        runtime: u16,
+        ttl: Option<u32>,
+        ttl_exists: bool,
     ) -> (bool, bool) {
         if path.is_empty() {
             return (false, false);
@@ -52,8 +59,16 @@ impl ToolCallGraph {
                     }
                 };
 
+                new_node.inserted_at_seconds = utils::current_utc_seconds();
                 new_node.value = value;
                 new_node.runtime = runtime;
+                new_node.ttl_present = ttl_exists;
+
+                if let Some(ttl_value) = ttl {
+                    // assert that ttl_present is true
+                    assert!(new_node.ttl_present,"ttl_present should be true when ttl has a value");
+                    new_node.ttl = ttl_value;
+                }
 
                 if sandbox_id.is_some() && new_node.sandbox_id.is_none() {
                     new_node.sandbox_id = sandbox_id;
@@ -107,3 +122,5 @@ impl ToolCallGraph {
         return (value_of_path, (sandbox_path, sandbox_id));
     }
 }
+
+// TODO: Write TTL and then pruning logic and persistence
