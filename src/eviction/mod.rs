@@ -1,4 +1,3 @@
-pub mod enforcer;
 pub mod ttl_and_watermark;
 
 #[derive(Clone, Debug, Default)]
@@ -21,7 +20,7 @@ pub struct EvictionResult {
 }
 
 impl EvictionResult {
-    pub fn merge(&mut self, other: EvictionResult) {
+    pub fn update(&mut self, other: EvictionResult) {
         self.nodes_removed += other.nodes_removed;
         self.sandboxes_removed += other.sandboxes_removed;
     }

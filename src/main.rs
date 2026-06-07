@@ -1,3 +1,4 @@
+mod enforcer;
 mod eviction;
 mod protocol_primitives;
 mod request_handler;
@@ -25,7 +26,7 @@ async fn main() -> io::Result<()> {
     let eviction_cache = Arc::clone(&cache_shared_object);
 
     tokio::spawn(async move {
-        eviction::enforcer::run_eviction_loop(eviction_cache).await;
+        enforcer::run_eviction_loop(eviction_cache).await;
     });
 
     println!("Listening on 127.0.0.1:7878 with tokio");

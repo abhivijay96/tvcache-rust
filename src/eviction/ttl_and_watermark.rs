@@ -12,7 +12,7 @@ pub async fn enforce(
 
     for (_task_id, tcg) in &entries {
         let mut tcg = tcg.lock().await;
-        result.merge(tcg.prune_expired(now_seconds));
+        result.update(tcg.prune_expired(now_seconds));
     }
 
     let _high_watermark_mb = config.high_watermark_mb;

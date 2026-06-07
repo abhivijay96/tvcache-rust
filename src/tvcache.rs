@@ -2,17 +2,16 @@ use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::Mutex;
 
-use crate::{eviction::EvictionPolicyConfig, tcg::ToolCallGraph, types::TcgSharedObject};
+use crate::{
+    eviction::EvictionPolicyConfig,
+    tcg::ToolCallGraph,
+    types::{CacheSnapshotObject, TcgSharedObject},
+};
 
 #[derive(Debug, Default)]
 pub struct TVCache {
     pub tcgs: HashMap<String, TcgSharedObject>,
-    eviction_policy: EvictionPolicyConfig,
-}
-
-pub struct EvictionEntriesSnapshot {
-    pub policy: EvictionPolicyConfig,
-    pub entries: Vec<(String, TcgSharedObject)>,
+    pub eviction_policy_config: EvictionPolicyConfig,
 }
 
 impl TVCache {
@@ -30,10 +29,10 @@ impl TVCache {
     }
 
     pub fn set_eviction_policy(&mut self, policy: EvictionPolicyConfig) {
-        self.eviction_policy = policy;
+        self.eviction_policy_config = policy;
     }
 
-    pub fn entries_snapshot(&self) -> Vec<(String, TcgSharedObject)> {
+    pub fn entries_snapshot(&self) -> CacheSnapshotObject {
         let mut result = Vec::<(String, TcgSharedObject)>::new();
 
         for (task_id, tcg_arc_object) in self.tcgs.iter() {
@@ -41,13 +40,6 @@ impl TVCache {
         }
 
         result
-    }
-
-    pub fn eviction_entries_snapshot(&self) -> EvictionEntriesSnapshot {
-        EvictionEntriesSnapshot {
-            policy: self.eviction_policy.clone(),
-            entries: self.entries_snapshot(),
-        }
     }
 }
 

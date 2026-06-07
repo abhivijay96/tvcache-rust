@@ -6,6 +6,7 @@ use crate::{tcg::ToolCallGraph, tvcache::TVCache};
 
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
+pub type CacheSnapshotObject = Vec<(String, TcgSharedObject)>;
 
 pub enum Request {
     Insert {
