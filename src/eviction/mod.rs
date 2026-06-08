@@ -1,16 +1,41 @@
 pub mod ttl_and_watermark;
 
 #[derive(Clone, Debug, Default)]
-pub enum EvictionPolicyConfig {
+pub enum EvictionPolicyName {
     #[default]
     None,
-    TtlAndWatermark(TtlAndWatermarkEvictionConfig),
+    TtlAndWatermark,
 }
 
 #[derive(Clone, Debug)]
-pub struct TtlAndWatermarkEvictionConfig {
+pub struct EvictionPolicyConfig {
+    pub policy_name: EvictionPolicyName,
     pub high_watermark_mb: u32,
     pub low_watermark_mb: u32,
+}
+
+impl EvictionPolicyConfig {
+    pub fn new(
+        policy_name: EvictionPolicyName,
+        high_watermark_mb: u32,
+        low_watermark_mb: u32,
+    ) -> Self {
+        Self {
+            policy_name,
+            high_watermark_mb,
+            low_watermark_mb,
+        }
+    }
+}
+
+impl Default for EvictionPolicyConfig {
+    fn default() -> Self {
+        Self {
+            policy_name: EvictionPolicyName::None,
+            high_watermark_mb: 1024,
+            low_watermark_mb: 768,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

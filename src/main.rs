@@ -10,7 +10,7 @@ mod utils;
 use std::sync::Arc;
 use std::{env, io};
 
-use eviction::{EvictionPolicyConfig, TtlAndWatermarkEvictionConfig};
+use eviction::{EvictionPolicyConfig, EvictionPolicyName};
 use request_handler::RequestHandler;
 use tokio::{net::TcpListener, sync::Mutex};
 use tvcache::TVCache;
@@ -19,14 +19,13 @@ use types::CacheSharedObject;
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:7878").await?;
-    let mut cache = TVCache::new();
-    cache.set_eviction_policy(parse_eviction_policy_config());
+    let eviction_policy_config = parse_eviction_policy_config();
 
-    let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(cache));
+    let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(TVCache::new()));
     let eviction_cache = Arc::clone(&cache_shared_object);
 
     tokio::spawn(async move {
-        enforcer::run_eviction_loop(eviction_cache).await;
+        enforcer::run_eviction_loop(eviction_cache, eviction_policy_config).await;
     });
 
     println!("Listening on 127.0.0.1:7878 with tokio");
@@ -64,14 +63,11 @@ fn parse_eviction_policy_config() -> EvictionPolicyConfig {
         }
     }
 
-    let config = TtlAndWatermarkEvictionConfig {
-        high_watermark_mb,
-        low_watermark_mb,
+    let policy_name = match eviction_policy.as_str() {
+        "none" => EvictionPolicyName::None,
+        "ttl_and_watermark" => EvictionPolicyName::TtlAndWatermark,
+        _ => EvictionPolicyName::TtlAndWatermark,
     };
 
-    match eviction_policy.as_str() {
-        "none" => EvictionPolicyConfig::None,
-        "ttl_and_watermark" => EvictionPolicyConfig::TtlAndWatermark(config),
-        _ => EvictionPolicyConfig::TtlAndWatermark(config),
-    }
+    EvictionPolicyConfig::new(policy_name, high_watermark_mb, low_watermark_mb)
 }

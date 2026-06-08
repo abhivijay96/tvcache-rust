@@ -1,9 +1,7 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use serde::Serialize;
-
-use crate::eviction::EvictionResult;
 use crate::utils;
+use serde::Serialize;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Node {
@@ -20,8 +18,8 @@ pub struct Node {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ToolCallGraph {
     pub root: Node,
-    pub number_of_nodes: i16,
-    pub number_of_envs: i16,
+    pub number_of_nodes: u32,
+    pub number_of_sandboxes: u32,
 }
 
 impl ToolCallGraph {
@@ -77,7 +75,7 @@ impl ToolCallGraph {
 
                 if sandbox_id.is_some() && new_node.sandbox_id.is_none() {
                     new_node.sandbox_id = sandbox_id;
-                    self.number_of_envs += 1;
+                    self.number_of_sandboxes += 1;
                     return (true, true);
                 }
 
@@ -126,10 +124,6 @@ impl ToolCallGraph {
         }
 
         return (value_of_path, (sandbox_path, sandbox_id));
-    }
-
-    pub fn prune_expired(&mut self, _now_seconds: u64) -> EvictionResult {
-        EvictionResult::default()
     }
 }
 
