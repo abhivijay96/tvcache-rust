@@ -1,7 +1,8 @@
 use crate::{
     eviction::{EvictionPolicyConfig, EvictionResult},
     tcg::Node,
-    types::CacheSnapshotObject,
+    tvcache::TVCache,
+    types::{CacheSharedObject, CacheSnapshotObject},
     utils,
 };
 
@@ -9,6 +10,7 @@ fn get_removed_count(node: &Node) -> EvictionResult {
     let mut result = EvictionResult {
         nodes_removed: 1,
         sandboxes_removed: if node.sandbox_id.is_some() { 1 } else { 0 },
+        size_removed_in_bytes: node.size_in_bytes as u64,
     };
 
     // Node will not be none because it is not optional, if there is a key, there is a node
@@ -41,11 +43,34 @@ fn prune_expired_recursive(node: &mut Node, eviction_result: &mut EvictionResult
     });
 }
 
-pub async fn enforce(
-    entries: CacheSnapshotObject,
-    config: &EvictionPolicyConfig,
-) -> EvictionResult {
+fn get_high_watermark_size_in_bytes(config: &EvictionPolicyConfig) -> u64 {
+    config.high_watermark_mb as u64 * 1024 * 1024
+}
+
+async fn get_total_cache_size_in_bytes(entries: &CacheSnapshotObject) -> u64 {
+    let mut total_size_in_bytes = 0;
+
+    for (_task_id, tcg) in entries {
+        let tcg = tcg.lock().await;
+        total_size_in_bytes += tcg.size_in_bytes;
+    }
+
+    total_size_in_bytes
+}
+
+fn prune_cache_to_fit(
+    _cache: &mut TVCache,
+    _required_size: u64,
+    _eviction_result: &mut EvictionResult,
+) {
+}
+
+pub async fn enforce(cache: CacheSharedObject, config: &EvictionPolicyConfig) -> EvictionResult {
     let mut result = EvictionResult::default();
+    let entries = {
+        let cache = cache.lock().await;
+        cache.entries_snapshot()
+    };
 
     for (_task_id, tcg) in &entries {
         let mut tcg = tcg.lock().await;
@@ -55,11 +80,20 @@ pub async fn enforce(
 
         tcg.number_of_nodes -= tcg_result.nodes_removed;
         tcg.number_of_sandboxes -= tcg_result.sandboxes_removed;
+        tcg.size_in_bytes -= tcg_result.size_removed_in_bytes;
 
         result.update(tcg_result);
     }
 
-    let _high_watermark_mb = config.high_watermark_mb;
+    let high_watermark_size_in_bytes = get_high_watermark_size_in_bytes(config);
+    let total_cache_size_in_bytes = get_total_cache_size_in_bytes(&entries).await;
+
+    if total_cache_size_in_bytes > high_watermark_size_in_bytes {
+        let required_size = total_cache_size_in_bytes - high_watermark_size_in_bytes;
+        let mut cache = cache.lock().await;
+        prune_cache_to_fit(&mut cache, required_size, &mut result);
+    }
+
     let _low_watermark_mb = config.low_watermark_mb;
     let _total_tcgs = entries.len();
 

@@ -1,25 +1,14 @@
-use std::collections::{hash_map::Entry, HashMap};
-
+use crate::tcg::Node;
 use crate::utils;
 use serde::Serialize;
-
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct Node {
-    pub children: HashMap<String, Node>,
-    pub sandbox_id: Option<String>,
-    pub value: Option<String>,
-    pub runtime: u16,
-    pub ttl_present: bool,
-    pub ttl: u32, // seconds
-    pub inserted_at_seconds: u64,
-    pub number_of_hits: u64,
-}
+use std::collections::hash_map::Entry;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ToolCallGraph {
     pub root: Node,
     pub number_of_nodes: u32,
     pub number_of_sandboxes: u32,
+    pub size_in_bytes: u64,
 }
 
 impl ToolCallGraph {
@@ -48,14 +37,24 @@ impl ToolCallGraph {
                 if let Some(next) = curr.children.get_mut(&p) {
                     curr = next;
                 } else {
+                    // Not inserting, so no need to call update size.
                     return (false, false);
                 }
             } else {
-                let new_node = match curr.children.entry(p) {
-                    Entry::Occupied(entry) => entry.into_mut(),
+                let path_entry_size_in_bytes = p.len() as u32;
+                let mut sandbox_id_consumed = false;
+
+                let (new_node, old_size_in_bytes) = match curr.children.entry(p) {
+                    Entry::Occupied(entry) => {
+                        let node = entry.into_mut();
+                        let old_size_in_bytes = node.size_in_bytes;
+
+                        (node, old_size_in_bytes)
+                    }
                     Entry::Vacant(entry) => {
                         self.number_of_nodes += 1;
-                        entry.insert(Node::default())
+
+                        (entry.insert(Node::default()), 0)
                     }
                 };
 
@@ -76,10 +75,14 @@ impl ToolCallGraph {
                 if sandbox_id.is_some() && new_node.sandbox_id.is_none() {
                     new_node.sandbox_id = sandbox_id;
                     self.number_of_sandboxes += 1;
-                    return (true, true);
+                    sandbox_id_consumed = true;
                 }
 
-                return (true, false);
+                new_node.update_size_in_bytes(path_entry_size_in_bytes);
+                self.size_in_bytes =
+                    self.size_in_bytes - old_size_in_bytes as u64 + new_node.size_in_bytes as u64;
+
+                return (true, sandbox_id_consumed);
             }
         }
 
@@ -114,12 +117,29 @@ impl ToolCallGraph {
                 }
 
                 if curr_path.len() == path_len {
-                    curr.number_of_hits += 1;
+                    curr.number_of_cache_hits += 1;
                     value_of_path = curr.value.clone();
                 }
             } else {
                 // The path has diverged from the tcg, so return what you have seen so far, if value is found, return it
                 break;
+            }
+        }
+
+        if value_of_path.is_none() {
+            if sandbox_id.is_some() {
+                let mut sandbox_node = &mut self.root;
+
+                for p in sandbox_path.as_ref().expect("Sandbox path is invalid") {
+                    sandbox_node = sandbox_node
+                        .children
+                        .get_mut(p)
+                        .expect("The LPM path that should be valid is empty now");
+                }
+
+                // if we start seeing errors here, lets add more logs and reproduce it.
+
+                sandbox_node.number_of_lpm_hits += 1;
             }
         }
 

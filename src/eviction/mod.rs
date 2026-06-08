@@ -42,11 +42,13 @@ impl Default for EvictionPolicyConfig {
 pub struct EvictionResult {
     pub nodes_removed: u32,
     pub sandboxes_removed: u32,
+    pub size_removed_in_bytes: u64,
 }
 
 impl EvictionResult {
     pub fn update(&mut self, other: EvictionResult) {
         self.nodes_removed += other.nodes_removed;
         self.sandboxes_removed += other.sandboxes_removed;
+        self.size_removed_in_bytes += other.size_removed_in_bytes;
     }
 }
