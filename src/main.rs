@@ -10,11 +10,11 @@ mod utils;
 use std::sync::Arc;
 use std::{env, io};
 
-use eviction::{EvictionPolicyConfig, EvictionPolicyName};
+use eviction::{sandbox_tracker::SandboxTracker, EvictionPolicyConfig, EvictionPolicyName};
 use request_handler::RequestHandler;
 use tokio::{net::TcpListener, sync::Mutex};
 use tvcache::TVCache;
-use types::CacheSharedObject;
+use types::{CacheSharedObject, SandboxTrackerSharedObject};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -22,10 +22,18 @@ async fn main() -> io::Result<()> {
     let eviction_policy_config = parse_eviction_policy_config();
 
     let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(TVCache::new()));
+    let sandbox_tracker_shared_object: SandboxTrackerSharedObject =
+        Arc::new(Mutex::new(SandboxTracker::new()));
     let eviction_cache = Arc::clone(&cache_shared_object);
+    let eviction_sandbox_tracker = Arc::clone(&sandbox_tracker_shared_object);
 
     tokio::spawn(async move {
-        enforcer::run_eviction_loop(eviction_cache, eviction_policy_config).await;
+        enforcer::run_eviction_loop(
+            eviction_cache,
+            eviction_policy_config,
+            eviction_sandbox_tracker,
+        )
+        .await;
     });
 
     println!("Listening on 127.0.0.1:7878 with tokio");

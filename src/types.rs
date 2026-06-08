@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{tcg::ToolCallGraph, tvcache::TVCache};
+use crate::{eviction::sandbox_tracker::SandboxTracker, tcg::ToolCallGraph, tvcache::TVCache};
 
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
 pub type CacheSnapshotObject = Vec<(String, TcgSharedObject)>;
+pub type SandboxTrackerSharedObject = Arc<Mutex<SandboxTracker>>;
 
 pub enum Request {
     Insert {

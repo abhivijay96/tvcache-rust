@@ -20,6 +20,19 @@ cd tests
 uv run load_test.py
 ```
 
+Run the eviction policy test against a fresh Rust server with watermark eviction enabled:
+
+```sh
+cargo run -- --eviction-policy=ttl_and_watermark --high-watermark-mb=2 --low-watermark-mb=1
+```
+
+Then, in another terminal:
+
+```sh
+cd tests
+uv run test_eviction.py
+```
+
 Open the TCG visualizer in another terminal:
 
 ```sh
@@ -57,5 +70,7 @@ uv run load_test.py --num-tasks 8 --num-rollouts 2 --depth 4
 uv run load_test.py --build-workers 4
 uv run load_test.py --timeout 30 --retries 5 --retry-backoff 0.1
 ```
+
+The eviction test creates enough data to exceed the 2 MB high watermark, warms a subset of tasks with repeated exact `FIND` calls, waits for the eviction loop, and checks that hot tasks are retained at least as well as cold tasks. Its test settings are top-level constants in `test_eviction.py`. Run it against a fresh server because eviction operates on the whole cache, not only the test-created task prefix.
 
 The visualizer calls the same `DUMP_ALL` endpoint and renders one TCG at a time. Use the task selector to switch between TCGs and the refresh button to pull the latest state from the Rust server.

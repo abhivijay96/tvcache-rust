@@ -1,3 +1,4 @@
+pub mod sandbox_tracker;
 pub mod ttl_and_watermark;
 
 #[derive(Clone, Debug, Default)]
@@ -43,6 +44,7 @@ pub struct EvictionResult {
     pub nodes_removed: u32,
     pub sandboxes_removed: u32,
     pub size_removed_in_bytes: u64,
+    pub sandbox_ids_removed: Vec<String>,
 }
 
 impl EvictionResult {
@@ -50,5 +52,6 @@ impl EvictionResult {
         self.nodes_removed += other.nodes_removed;
         self.sandboxes_removed += other.sandboxes_removed;
         self.size_removed_in_bytes += other.size_removed_in_bytes;
+        self.sandbox_ids_removed.extend(other.sandbox_ids_removed);
     }
 }
