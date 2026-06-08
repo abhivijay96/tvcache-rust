@@ -1,4 +1,4 @@
-mod enforcer;
+mod cache_policy_enforcer;
 mod eviction;
 mod protocol_primitives;
 mod request_handler;
@@ -28,7 +28,7 @@ async fn main() -> io::Result<()> {
     let eviction_sandbox_tracker = Arc::clone(&sandbox_tracker_shared_object);
 
     tokio::spawn(async move {
-        enforcer::run_eviction_loop(
+        cache_policy_enforcer::run_eviction_loop(
             eviction_cache,
             eviction_policy_config,
             eviction_sandbox_tracker,

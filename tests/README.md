@@ -33,6 +33,13 @@ cd tests
 uv run test_eviction.py
 ```
 
+Run the TTL eviction test against a fresh Rust server with the same eviction policy enabled:
+
+```sh
+cd tests
+uv run test_ttl_eviction.py
+```
+
 Open the TCG visualizer in another terminal:
 
 ```sh
@@ -71,6 +78,8 @@ uv run load_test.py --build-workers 4
 uv run load_test.py --timeout 30 --retries 5 --retry-backoff 0.1
 ```
 
-The eviction test creates enough data to exceed the 2 MB high watermark, warms a subset of tasks with repeated exact `FIND` calls, waits for the eviction loop, and checks that hot tasks are retained at least as well as cold tasks. Its test settings are top-level constants in `test_eviction.py`. Run it against a fresh server because eviction operates on the whole cache, not only the test-created task prefix.
+The eviction test creates enough data to exceed the 2 MB high watermark, warms a subset of tasks with repeated exact `FIND` calls, waits for the eviction loop, and checks that hot tasks are retained at least as well as cold tasks. It also runs a post-eviction exact `FIND` on every hot path and checks that each node's cache-hit counter increases. Its test settings are top-level constants in `test_eviction.py`. Run it against a fresh server because eviction operates on the whole cache, not only the test-created task prefix.
+
+The TTL eviction test inserts a root, an expiring child with a four-node subtree, and a non-expiring sibling. It waits for the eviction loop and checks that the expired subtree is removed while the sibling remains readable. Its settings are top-level constants in `test_ttl_eviction.py`.
 
 The visualizer calls the same `DUMP_ALL` endpoint and renders one TCG at a time. Use the task selector to switch between TCGs and the refresh button to pull the latest state from the Rust server.

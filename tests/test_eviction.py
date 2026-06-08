@@ -74,6 +74,23 @@ def task_node_count(cache_dump: object, task_id: str) -> int:
     return max(0, count_nodes(root) - 1)
 
 
+def get_node(cache_dump: object, task_id: str, path: list[str]) -> dict[str, Any] | None:
+    if not isinstance(cache_dump, dict) or task_id not in cache_dump:
+        return None
+
+    curr = cache_dump[task_id].get("root")
+    if not isinstance(curr, dict):
+        return None
+
+    for path_entry in path:
+        children = curr.get("children", {})
+        if path_entry not in children:
+            return None
+        curr = children[path_entry]
+
+    return curr
+
+
 def prefixed_node_count(cache_dump: object, task_prefix: str) -> int:
     return sum(
         task_node_count(cache_dump, task_id)
@@ -209,6 +226,56 @@ def print_retention(
     return hot_retention, cold_retention
 
 
+async def verify_hot_cache_hits_after_eviction(
+    client: AsyncPersistentCacheClient,
+    task_data: list[TaskData],
+    hot_tasks: set[str],
+    after_dump: object,
+) -> None:
+    for task in task_data:
+        if task.task_id not in hot_tasks:
+            continue
+
+        for node_idx, node in enumerate(task.nodes):
+            before_node = get_node(after_dump, task.task_id, node.path)
+            if before_node is None:
+                raise AssertionError(
+                    f"expected hot path to survive eviction: "
+                    f"task_id={task.task_id} path={node.path}"
+                )
+
+            before_hits = before_node.get("number_of_cache_hits", 0)
+            response = await client.find(task.task_id, node.path)
+            expected = {
+                "type": "find_result",
+                "value": node.value,
+                "sandbox_path": node.path,
+                "sandbox_id": f"{task.task_id}-sandbox-{node_idx:02d}",
+            }
+            if response != expected:
+                raise AssertionError(
+                    f"expected post-eviction hot path find to be an exact cache hit: "
+                    f"task_id={task.task_id} path={node.path} "
+                    f"expected={expected} actual={response}"
+                )
+
+            latest_dump = await dump_all(client)
+            after_node = get_node(latest_dump, task.task_id, node.path)
+            if after_node is None:
+                raise AssertionError(
+                    f"hot path disappeared after post-eviction find: "
+                    f"task_id={task.task_id} path={node.path}"
+                )
+
+            after_hits = after_node.get("number_of_cache_hits", 0)
+            if after_hits != before_hits + 1:
+                raise AssertionError(
+                    f"expected post-eviction find to increment cache hits by 1: "
+                    f"task_id={task.task_id} path={node.path} "
+                    f"before={before_hits} after={after_hits}"
+                )
+
+
 async def run_test() -> None:
     task_prefix = f"eviction-{int(time.time())}"
 
@@ -268,6 +335,13 @@ async def run_test() -> None:
                 "expected hot TCGs to be retained at least as well as cold TCGs: "
                 f"hot={hot_retention:.2%} cold={cold_retention:.2%}"
             )
+
+        await verify_hot_cache_hits_after_eviction(
+            client,
+            task_data,
+            hot_tasks,
+            after_dump,
+        )
 
     print("Eviction policy test passed")
 
