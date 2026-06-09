@@ -13,11 +13,15 @@ use std::{env, io};
 use eviction::{sandbox_tracker::SandboxTracker, EvictionPolicyConfig, EvictionPolicyName};
 use request_handler::RequestHandler;
 use tokio::{net::TcpListener, sync::Mutex};
+use tracing::{error, info};
+use tracing_subscriber::EnvFilter;
 use tvcache::TVCache;
 use types::{CacheSharedObject, SandboxTrackerSharedObject};
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    init_tracing();
+
     let listener = TcpListener::bind("127.0.0.1:7878").await?;
     let eviction_policy_config = parse_eviction_policy_config();
 
@@ -36,24 +40,32 @@ async fn main() -> io::Result<()> {
         .await;
     });
 
-    println!("Listening on 127.0.0.1:7878 with tokio");
+    info!("listening on 127.0.0.1:7878 with tokio");
 
     loop {
         match listener.accept().await {
             Ok((tcp_stream, _ /*this is socket attress but I am nto usin this */)) => {
                 let cache_shared_object = Arc::clone(&cache_shared_object);
+                let sandbox_tracker_shared_object = Arc::clone(&sandbox_tracker_shared_object);
                 let stream = tcp_stream;
 
                 tokio::spawn(async move {
-                    let request_handler = RequestHandler::new(cache_shared_object);
+                    let request_handler =
+                        RequestHandler::new(cache_shared_object, sandbox_tracker_shared_object);
                     request_handler.handle_stream(stream).await;
                 });
             }
             Err(error) => {
-                eprintln!("Failed to accept connection: {error}");
+                error!(%error, "failed to accept connection");
             }
         }
     }
+}
+
+fn init_tracing() {
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 }
 
 fn parse_eviction_policy_config() -> EvictionPolicyConfig {

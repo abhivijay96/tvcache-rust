@@ -1,20 +1,25 @@
 use std::io;
 
 use tokio::net::TcpStream;
+use tracing::error;
 
 use crate::{
     protocol_primitives,
     tvcache::tcg_entries_to_json,
-    types::{CacheSharedObject, Request, Response},
+    types::{CacheSharedObject, Request, Response, SandboxTrackerSharedObject},
 };
 
 pub struct RequestHandler {
     cache: CacheSharedObject,
+    sandbox_tracker: SandboxTrackerSharedObject,
 }
 
 impl RequestHandler {
-    pub fn new(cache: CacheSharedObject) -> Self {
-        return Self { cache: cache };
+    pub fn new(cache: CacheSharedObject, sandbox_tracker: SandboxTrackerSharedObject) -> Self {
+        return Self {
+            cache: cache,
+            sandbox_tracker: sandbox_tracker,
+        };
     }
 
     pub async fn handle_stream(&self, mut stream: TcpStream) {
@@ -23,11 +28,10 @@ impl RequestHandler {
                 Ok(request) => {
                     let response = self.execute_request(request).await;
                     if let Err(err) = self.write_response(&mut stream, response).await {
-                        println!("Error while writing response: {err}");
+                        error!(error = %err, "error while writing response");
                     }
                 }
                 Err(_err) => {
-                    // println!("Error while handling stream: {err}");
                     break;
                 }
             }
@@ -101,6 +105,12 @@ impl RequestHandler {
 
             3 => Ok(Request::DumpAll),
 
+            4 => {
+                let sandbox_id = protocol_primitives::read_string_u16(stream).await?;
+
+                Ok(Request::UnrefSandbox { sandbox_id })
+            }
+
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown request type: {request_type}"),
@@ -140,15 +150,20 @@ impl RequestHandler {
                     cache.get_tcg(task_id)
                 };
 
-                let (value, (sandbox_path, sandbox_id)) = {
+                {
                     let mut tcg = tcg.lock().await;
-                    tcg.find(path)
-                };
+                    let (value, (sandbox_path, sandbox_id)) = { tcg.find(path) };
 
-                Response::FindResult {
-                    value,
-                    sandbox_path,
-                    sandbox_id,
+                    if let Some(id) = &sandbox_id {
+                        let mut sandbox_tracker = self.sandbox_tracker.lock().await;
+                        sandbox_tracker.increment_reference(id);
+                    }
+
+                    Response::FindResult {
+                        value,
+                        sandbox_path,
+                        sandbox_id,
+                    }
                 }
             }
             Request::DumpAll => {
@@ -164,6 +179,16 @@ impl RequestHandler {
                     Err(error) => Response::Error {
                         message: error.to_string(),
                     },
+                }
+            }
+            Request::UnrefSandbox { sandbox_id } => {
+                let remaining_references = {
+                    let mut sandbox_tracker = self.sandbox_tracker.lock().await;
+                    sandbox_tracker.decrement_reference(&sandbox_id)
+                };
+
+                Response::UnrefSandboxResult {
+                    remaining_references,
                 }
             }
         }
@@ -210,6 +235,12 @@ impl RequestHandler {
                 } else {
                     protocol_primitives::write_bool(stream, false).await?;
                 }
+            }
+            Response::UnrefSandboxResult {
+                remaining_references,
+            } => {
+                protocol_primitives::write_u8(stream, 5).await?;
+                protocol_primitives::write_u32(stream, remaining_references).await?;
             }
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;

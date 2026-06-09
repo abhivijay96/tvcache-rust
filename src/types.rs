@@ -7,6 +7,14 @@ use crate::{eviction::sandbox_tracker::SandboxTracker, tcg::ToolCallGraph, tvcac
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
 pub type CacheSnapshotObject = Vec<(String, TcgSharedObject)>;
+
+// Lock ordering rule:
+// If code needs both a TCG lock and the sandbox tracker lock, acquire them in this order:
+// 1. TCG lock
+// 2. Sandbox tracker lock
+//
+// Never acquire the sandbox tracker lock first and then a TCG lock, or concurrent
+// find and eviction paths can deadlock.
 pub type SandboxTrackerSharedObject = Arc<Mutex<SandboxTracker>>;
 
 pub enum Request {
@@ -24,6 +32,9 @@ pub enum Request {
         path: Vec<String>,
     },
     DumpAll,
+    UnrefSandbox {
+        sandbox_id: String,
+    },
 }
 
 pub enum Response {
@@ -35,6 +46,9 @@ pub enum Response {
         value: Option<String>,
         sandbox_path: Option<Vec<String>>,
         sandbox_id: Option<String>,
+    },
+    UnrefSandboxResult {
+        remaining_references: u32,
     },
     Error {
         message: String,

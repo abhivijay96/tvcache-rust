@@ -12,11 +12,13 @@ from typing import Any
 INSERT_REQUEST = 1
 FIND_REQUEST = 2
 DUMP_ALL_REQUEST = 3
+UNREF_SANDBOX_REQUEST = 4
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
 ERROR_RESPONSE = 3
 JSON_RESPONSE = 4
+UNREF_SANDBOX_RESULT_RESPONSE = 5
 
 
 def write_u8(value: int) -> bytes:
@@ -86,6 +88,10 @@ def encode_find(task_id: str, path: list[str]) -> bytes:
 
 def encode_dump_all() -> bytes:
     return write_u8(DUMP_ALL_REQUEST)
+
+
+def encode_unref_sandbox(sandbox_id: str) -> bytes:
+    return write_u8(UNREF_SANDBOX_REQUEST) + write_string_u16(sandbox_id)
 
 
 def read_exact(sock: socket.socket, size: int) -> bytes:
@@ -180,6 +186,12 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "json": read_string_u32(sock),
         }
 
+    if response_type == UNREF_SANDBOX_RESULT_RESPONSE:
+        return {
+            "type": "unref_sandbox_result",
+            "remaining_references": read_u32(sock),
+        }
+
     raise ValueError(f"unknown response type: {response_type}")
 
 
@@ -228,6 +240,9 @@ class CacheClient:
 
     def dump_all_response(self) -> dict[str, Any]:
         return self.send_request(encode_dump_all())
+
+    def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        return self.send_request(encode_unref_sandbox(sandbox_id))
 
     def dump_all(self) -> object:
         response = self.dump_all_response()
@@ -301,6 +316,9 @@ class PersistentCacheClient:
 
     def dump_all_response(self) -> dict[str, Any]:
         return self.send_request(encode_dump_all())
+
+    def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        return self.send_request(encode_unref_sandbox(sandbox_id))
 
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
@@ -391,6 +409,12 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
             "json": await async_read_string_u32(reader),
         }
 
+    if response_type == UNREF_SANDBOX_RESULT_RESPONSE:
+        return {
+            "type": "unref_sandbox_result",
+            "remaining_references": await async_read_u32(reader),
+        }
+
     raise ValueError(f"unknown response type: {response_type}")
 
 
@@ -466,3 +490,6 @@ class AsyncPersistentCacheClient:
 
     async def dump_all_response(self) -> dict[str, Any]:
         return await self.send_request(encode_dump_all())
+
+    async def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
+        return await self.send_request(encode_unref_sandbox(sandbox_id))
