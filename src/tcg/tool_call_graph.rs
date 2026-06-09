@@ -1,4 +1,5 @@
 use crate::tcg::Node;
+use crate::types::SandboxCandidate;
 use crate::utils;
 use serde::Serialize;
 use std::collections::hash_map::Entry;
@@ -144,6 +145,42 @@ impl ToolCallGraph {
         }
 
         return (value_of_path, (sandbox_path, sandbox_id));
+    }
+
+    pub fn collect_sandbox_candidates(&self, task_id: &str) -> Vec<SandboxCandidate> {
+        let mut candidates = Vec::new();
+        let mut current_path = Vec::new();
+
+        collect_sandbox_candidates_recursive(
+            task_id,
+            &self.root,
+            &mut current_path,
+            &mut candidates,
+        );
+
+        candidates
+    }
+}
+
+fn collect_sandbox_candidates_recursive(
+    task_id: &str,
+    node: &Node,
+    current_path: &mut Vec<String>,
+    candidates: &mut Vec<SandboxCandidate>,
+) {
+    if let Some(sandbox_id) = &node.sandbox_id {
+        candidates.push(SandboxCandidate {
+            task_id: task_id.to_string(),
+            sandbox_path: current_path.clone(),
+            sandbox_id: sandbox_id.clone(),
+            score: node.number_of_lpm_hits,
+        });
+    }
+
+    for (path_entry, child) in &node.children {
+        current_path.push(path_entry.clone());
+        collect_sandbox_candidates_recursive(task_id, child, current_path, candidates);
+        current_path.pop();
     }
 }
 

@@ -67,6 +67,10 @@ pub async fn write_u32(stream: &mut TcpStream, value: u32) -> Result<(), io::Err
     stream.write_all(&value.to_be_bytes()).await
 }
 
+pub async fn write_u64(stream: &mut TcpStream, value: u64) -> Result<(), io::Error> {
+    stream.write_all(&value.to_be_bytes()).await
+}
+
 pub async fn write_string_u16(stream: &mut TcpStream, value: &str) -> Result<(), io::Error> {
     let bytes = value.as_bytes();
     let len = u16::try_from(bytes.len()).map_err(|error| {

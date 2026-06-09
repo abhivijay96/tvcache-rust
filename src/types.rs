@@ -35,6 +35,12 @@ pub enum Request {
     UnrefSandbox {
         sandbox_id: String,
     },
+    MarkSandboxesEvicted {
+        sandbox_eviction_records: Vec<SandboxEvictionRecord>,
+    },
+    ListSandboxCandidates {
+        limit: u16,
+    },
 }
 
 pub enum Response {
@@ -50,10 +56,29 @@ pub enum Response {
     UnrefSandboxResult {
         remaining_references: u32,
     },
+    MarkSandboxesEvictedResult {
+        sandbox_ids_recorded: u32,
+    },
+    SandboxCandidates {
+        candidates: Vec<SandboxCandidate>,
+    },
     Error {
         message: String,
     },
     Json {
         json: String,
     },
+}
+
+pub struct SandboxCandidate {
+    pub task_id: String,
+    pub sandbox_path: Vec<String>,
+    pub sandbox_id: String,
+    pub score: u64,
+}
+
+pub struct SandboxEvictionRecord {
+    pub task_id: String,
+    pub sandbox_path: Vec<String>,
+    pub sandbox_id: String,
 }

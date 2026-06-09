@@ -6,7 +6,10 @@ use tracing::error;
 use crate::{
     protocol_primitives,
     tvcache::tcg_entries_to_json,
-    types::{CacheSharedObject, Request, Response, SandboxTrackerSharedObject},
+    types::{
+        CacheSharedObject, Request, Response, SandboxCandidate, SandboxEvictionRecord,
+        SandboxTrackerSharedObject,
+    },
 };
 
 pub struct RequestHandler {
@@ -111,6 +114,20 @@ impl RequestHandler {
                 Ok(Request::UnrefSandbox { sandbox_id })
             }
 
+            5 => {
+                let sandbox_eviction_records = self.read_sandbox_eviction_records(stream).await?;
+
+                Ok(Request::MarkSandboxesEvicted {
+                    sandbox_eviction_records,
+                })
+            }
+
+            6 => {
+                let limit = protocol_primitives::read_u16(stream).await?;
+
+                Ok(Request::ListSandboxCandidates { limit })
+            }
+
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown request type: {request_type}"),
@@ -191,6 +208,45 @@ impl RequestHandler {
                     remaining_references,
                 }
             }
+            Request::MarkSandboxesEvicted {
+                sandbox_eviction_records,
+            } => {
+                let sandbox_ids_recorded = sandbox_eviction_records.len() as u32;
+
+                {
+                    let mut sandbox_tracker = self.sandbox_tracker.lock().await;
+                    let sandbox_ids = sandbox_eviction_records
+                        .iter()
+                        .map(|record| {
+                            let _ = (&record.task_id, &record.sandbox_path);
+                            record.sandbox_id.clone()
+                        })
+                        .collect::<Vec<String>>();
+                    sandbox_tracker.record_many(&sandbox_ids);
+                }
+
+                Response::MarkSandboxesEvictedResult {
+                    sandbox_ids_recorded,
+                }
+            }
+            Request::ListSandboxCandidates { limit } => {
+                let limit = if limit == 0 { 10 } else { limit } as usize;
+                let mut candidates = Vec::<SandboxCandidate>::new();
+                let entries = {
+                    let cache = self.cache.lock().await;
+                    cache.entries_snapshot()
+                };
+
+                for (task_id, tcg) in entries {
+                    let tcg = tcg.lock().await;
+                    candidates.extend(tcg.collect_sandbox_candidates(&task_id));
+                }
+
+                candidates.sort_by_key(|candidate| candidate.score);
+                candidates.truncate(limit);
+
+                Response::SandboxCandidates { candidates }
+            }
         }
     }
 
@@ -242,6 +298,16 @@ impl RequestHandler {
                 protocol_primitives::write_u8(stream, 5).await?;
                 protocol_primitives::write_u32(stream, remaining_references).await?;
             }
+            Response::MarkSandboxesEvictedResult {
+                sandbox_ids_recorded,
+            } => {
+                protocol_primitives::write_u8(stream, 6).await?;
+                protocol_primitives::write_u32(stream, sandbox_ids_recorded).await?;
+            }
+            Response::SandboxCandidates { candidates } => {
+                protocol_primitives::write_u8(stream, 7).await?;
+                self.write_sandbox_candidates(stream, &candidates).await?;
+            }
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
@@ -250,6 +316,52 @@ impl RequestHandler {
                 protocol_primitives::write_u8(stream, 4).await?;
                 protocol_primitives::write_string_u32(stream, &json).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    async fn read_sandbox_eviction_records(
+        &self,
+        stream: &mut TcpStream,
+    ) -> Result<Vec<SandboxEvictionRecord>, io::Error> {
+        let record_count = protocol_primitives::read_u16(stream).await? as usize;
+        let mut records = Vec::with_capacity(record_count);
+
+        for _ in 0..record_count {
+            let task_id = protocol_primitives::read_string_u16(stream).await?;
+            let sandbox_path = protocol_primitives::read_path(stream).await?;
+            let sandbox_id = protocol_primitives::read_string_u16(stream).await?;
+
+            records.push(SandboxEvictionRecord {
+                task_id,
+                sandbox_path,
+                sandbox_id,
+            });
+        }
+
+        Ok(records)
+    }
+
+    async fn write_sandbox_candidates(
+        &self,
+        stream: &mut TcpStream,
+        candidates: &[SandboxCandidate],
+    ) -> Result<(), io::Error> {
+        let candidate_count = u16::try_from(candidates.len()).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("too many sandbox candidates for u16 length: {error}"),
+            )
+        })?;
+
+        protocol_primitives::write_u16(stream, candidate_count).await?;
+
+        for candidate in candidates {
+            protocol_primitives::write_string_u16(stream, &candidate.task_id).await?;
+            protocol_primitives::write_path(stream, &candidate.sandbox_path).await?;
+            protocol_primitives::write_string_u16(stream, &candidate.sandbox_id).await?;
+            protocol_primitives::write_u64(stream, candidate.score).await?;
         }
 
         Ok(())

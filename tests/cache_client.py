@@ -13,12 +13,16 @@ INSERT_REQUEST = 1
 FIND_REQUEST = 2
 DUMP_ALL_REQUEST = 3
 UNREF_SANDBOX_REQUEST = 4
+MARK_SANDBOXES_EVICTED_REQUEST = 5
+LIST_SANDBOX_CANDIDATES_REQUEST = 6
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
 ERROR_RESPONSE = 3
 JSON_RESPONSE = 4
 UNREF_SANDBOX_RESULT_RESPONSE = 5
+MARK_SANDBOXES_EVICTED_RESULT_RESPONSE = 6
+SANDBOX_CANDIDATES_RESPONSE = 7
 
 
 def write_u8(value: int) -> bytes:
@@ -35,6 +39,10 @@ def write_u16(value: int) -> bytes:
 
 def write_u32(value: int) -> bytes:
     return struct.pack(">I", value)
+
+
+def write_u64(value: int) -> bytes:
+    return struct.pack(">Q", value)
 
 
 def write_string_u16(value: str) -> bytes:
@@ -94,6 +102,25 @@ def encode_unref_sandbox(sandbox_id: str) -> bytes:
     return write_u8(UNREF_SANDBOX_REQUEST) + write_string_u16(sandbox_id)
 
 
+def write_sandbox_eviction_record(record: dict[str, Any]) -> bytes:
+    return (
+        write_string_u16(record["task_id"])
+        + write_path(record["sandbox_path"])
+        + write_string_u16(record["sandbox_id"])
+    )
+
+
+def encode_mark_sandboxes_evicted(records: list[dict[str, Any]]) -> bytes:
+    encoded = write_u8(MARK_SANDBOXES_EVICTED_REQUEST) + write_u16(len(records))
+    for record in records:
+        encoded += write_sandbox_eviction_record(record)
+    return encoded
+
+
+def encode_list_sandbox_candidates(limit: int = 10) -> bytes:
+    return write_u8(LIST_SANDBOX_CANDIDATES_REQUEST) + write_u16(limit)
+
+
 def read_exact(sock: socket.socket, size: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < size:
@@ -125,6 +152,10 @@ def read_u32(sock: socket.socket) -> int:
     return struct.unpack(">I", read_exact(sock, 4))[0]
 
 
+def read_u64(sock: socket.socket) -> int:
+    return struct.unpack(">Q", read_exact(sock, 8))[0]
+
+
 def read_string_u16(sock: socket.socket) -> str:
     return read_exact(sock, read_u16(sock)).decode("utf-8")
 
@@ -154,6 +185,20 @@ def read_optional_path(sock: socket.socket) -> list[str] | None:
     if read_bool(sock):
         return read_path(sock)
     return None
+
+
+def read_sandbox_candidate(sock: socket.socket) -> dict[str, Any]:
+    return {
+        "task_id": read_string_u16(sock),
+        "sandbox_path": read_path(sock),
+        "sandbox_id": read_string_u16(sock),
+        "score": read_u64(sock),
+    }
+
+
+def read_sandbox_candidates(sock: socket.socket) -> list[dict[str, Any]]:
+    count = read_u16(sock)
+    return [read_sandbox_candidate(sock) for _ in range(count)]
 
 
 def decode_response(sock: socket.socket) -> dict[str, Any]:
@@ -190,6 +235,18 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
         return {
             "type": "unref_sandbox_result",
             "remaining_references": read_u32(sock),
+        }
+
+    if response_type == MARK_SANDBOXES_EVICTED_RESULT_RESPONSE:
+        return {
+            "type": "mark_sandboxes_evicted_result",
+            "sandbox_ids_recorded": read_u32(sock),
+        }
+
+    if response_type == SANDBOX_CANDIDATES_RESPONSE:
+        return {
+            "type": "sandbox_candidates",
+            "candidates": read_sandbox_candidates(sock),
         }
 
     raise ValueError(f"unknown response type: {response_type}")
@@ -243,6 +300,12 @@ class CacheClient:
 
     def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return self.send_request(encode_unref_sandbox(sandbox_id))
+
+    def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.send_request(encode_mark_sandboxes_evicted(records))
+
+    def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
+        return self.send_request(encode_list_sandbox_candidates(limit))
 
     def dump_all(self) -> object:
         response = self.dump_all_response()
@@ -320,6 +383,12 @@ class PersistentCacheClient:
     def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return self.send_request(encode_unref_sandbox(sandbox_id))
 
+    def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return self.send_request(encode_mark_sandboxes_evicted(records))
+
+    def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
+        return self.send_request(encode_list_sandbox_candidates(limit))
+
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
     return struct.unpack(">B", await reader.readexactly(1))[0]
@@ -340,6 +409,10 @@ async def async_read_u16(reader: asyncio.StreamReader) -> int:
 
 async def async_read_u32(reader: asyncio.StreamReader) -> int:
     return struct.unpack(">I", await reader.readexactly(4))[0]
+
+
+async def async_read_u64(reader: asyncio.StreamReader) -> int:
+    return struct.unpack(">Q", await reader.readexactly(8))[0]
 
 
 async def async_read_string_u16(reader: asyncio.StreamReader) -> str:
@@ -379,6 +452,22 @@ async def async_read_optional_path(
     return None
 
 
+async def async_read_sandbox_candidate(reader: asyncio.StreamReader) -> dict[str, Any]:
+    return {
+        "task_id": await async_read_string_u16(reader),
+        "sandbox_path": await async_read_path(reader),
+        "sandbox_id": await async_read_string_u16(reader),
+        "score": await async_read_u64(reader),
+    }
+
+
+async def async_read_sandbox_candidates(
+    reader: asyncio.StreamReader,
+) -> list[dict[str, Any]]:
+    count = await async_read_u16(reader)
+    return [await async_read_sandbox_candidate(reader) for _ in range(count)]
+
+
 async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
     response_type = await async_read_u8(reader)
 
@@ -413,6 +502,18 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
         return {
             "type": "unref_sandbox_result",
             "remaining_references": await async_read_u32(reader),
+        }
+
+    if response_type == MARK_SANDBOXES_EVICTED_RESULT_RESPONSE:
+        return {
+            "type": "mark_sandboxes_evicted_result",
+            "sandbox_ids_recorded": await async_read_u32(reader),
+        }
+
+    if response_type == SANDBOX_CANDIDATES_RESPONSE:
+        return {
+            "type": "sandbox_candidates",
+            "candidates": await async_read_sandbox_candidates(reader),
         }
 
     raise ValueError(f"unknown response type: {response_type}")
@@ -493,3 +594,9 @@ class AsyncPersistentCacheClient:
 
     async def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
         return await self.send_request(encode_unref_sandbox(sandbox_id))
+
+    async def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
+        return await self.send_request(encode_mark_sandboxes_evicted(records))
+
+    async def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
+        return await self.send_request(encode_list_sandbox_candidates(limit))
