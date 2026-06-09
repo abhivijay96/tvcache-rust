@@ -22,7 +22,7 @@ use types::{CacheSharedObject, SandboxTrackerSharedObject};
 async fn main() -> io::Result<()> {
     init_tracing();
 
-    let listener = TcpListener::bind("127.0.0.1:7878").await?;
+    let listener = TcpListener::bind("0.0.0.0:7878").await?;
     let eviction_policy_config = parse_eviction_policy_config();
 
     let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(TVCache::new()));
