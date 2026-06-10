@@ -7,7 +7,7 @@ pub struct Node {
     pub children: HashMap<String, Node>,
     pub sandbox_id: Option<String>,
     pub value: Option<String>,
-    pub runtime: u16,
+    pub runtime: u32, // milliseconds
     pub ttl_present: bool,
     pub ttl: u32, // seconds
     pub inserted_at_seconds: u64,

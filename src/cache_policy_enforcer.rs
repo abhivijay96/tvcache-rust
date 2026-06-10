@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::{
     eviction::{ttl_and_watermark, EvictionPolicyConfig, EvictionPolicyName, EvictionResult},
-    types::{CacheSharedObject, SandboxTrackerSharedObject, TcgSharedObject},
+    types::{CacheSharedObject, TcgSharedObject},
 };
 
 #[derive(Debug)]
@@ -15,11 +15,7 @@ struct TcgSizeLogEntry {
     number_of_sandboxes: u32,
 }
 
-pub async fn run_eviction_loop(
-    cache: CacheSharedObject,
-    config: EvictionPolicyConfig,
-    sandbox_tracker: SandboxTrackerSharedObject,
-) {
+pub async fn run_eviction_loop(cache: CacheSharedObject, config: EvictionPolicyConfig) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
 
     loop {
@@ -46,7 +42,7 @@ pub async fn run_eviction_loop(
             );
         }
 
-        let result = enforce_policy(&config, cache.clone(), sandbox_tracker.clone()).await;
+        let result = enforce_policy(&config, cache.clone()).await;
 
         info!(
             nodes_removed = result.nodes_removed,
@@ -92,12 +88,9 @@ fn log_cache_size_summary(
 pub async fn enforce_policy(
     config: &EvictionPolicyConfig,
     cache: CacheSharedObject,
-    sandbox_tracker: SandboxTrackerSharedObject,
 ) -> EvictionResult {
     match &config.policy_name {
         EvictionPolicyName::None => EvictionResult::default(),
-        EvictionPolicyName::TtlAndWatermark => {
-            ttl_and_watermark::enforce(cache, config, sandbox_tracker).await
-        }
+        EvictionPolicyName::TtlAndWatermark => ttl_and_watermark::enforce(cache, config).await,
     }
 }

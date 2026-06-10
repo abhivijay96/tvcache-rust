@@ -7,22 +7,18 @@ use crate::{
     protocol_primitives,
     tvcache::tcg_entries_to_json,
     types::{
-        CacheSharedObject, Request, Response, SandboxCandidate, SandboxEvictionRecord,
-        SandboxTrackerSharedObject,
+        CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
+        SandboxEvictionRecord,
     },
 };
 
 pub struct RequestHandler {
     cache: CacheSharedObject,
-    sandbox_tracker: SandboxTrackerSharedObject,
 }
 
 impl RequestHandler {
-    pub fn new(cache: CacheSharedObject, sandbox_tracker: SandboxTrackerSharedObject) -> Self {
-        return Self {
-            cache: cache,
-            sandbox_tracker: sandbox_tracker,
-        };
+    pub fn new(cache: CacheSharedObject) -> Self {
+        return Self { cache: cache };
     }
 
     pub async fn handle_stream(&self, mut stream: TcpStream) {
@@ -52,7 +48,7 @@ impl RequestHandler {
                 let mut sandbox_id = None;
                 let mut ttl: Option<u32> = None;
 
-                let runtime = protocol_primitives::read_u16(stream).await?;
+                let runtime = protocol_primitives::read_u32(stream).await?;
 
                 let value_exists = protocol_primitives::read_u8(stream).await?;
 
@@ -109,9 +105,13 @@ impl RequestHandler {
             3 => Ok(Request::DumpAll),
 
             4 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
                 let sandbox_id = protocol_primitives::read_string_u16(stream).await?;
 
-                Ok(Request::UnrefSandbox { sandbox_id })
+                Ok(Request::UnrefSandbox {
+                    task_id,
+                    sandbox_id,
+                })
             }
 
             5 => {
@@ -126,6 +126,14 @@ impl RequestHandler {
                 let limit = protocol_primitives::read_u16(stream).await?;
 
                 Ok(Request::ListSandboxCandidates { limit })
+            }
+
+            7 => Ok(Request::DrainReclaimableSandboxes),
+
+            8 => {
+                let limit = protocol_primitives::read_u16(stream).await?;
+
+                Ok(Request::ListHotSandboxes { limit })
             }
 
             _ => Err(io::Error::new(
@@ -171,9 +179,10 @@ impl RequestHandler {
                     let mut tcg = tcg.lock().await;
                     let (value, (sandbox_path, sandbox_id)) = { tcg.find(path) };
 
+                    // The returned sandbox may now be in use by the rollout, so count
+                    // the reference under the same per-TCG lock (no cross-TCG lock).
                     if let Some(id) = &sandbox_id {
-                        let mut sandbox_tracker = self.sandbox_tracker.lock().await;
-                        sandbox_tracker.increment_reference(id);
+                        tcg.increment_sandbox_reference(id);
                     }
 
                     Response::FindResult {
@@ -198,10 +207,21 @@ impl RequestHandler {
                     },
                 }
             }
-            Request::UnrefSandbox { sandbox_id } => {
-                let remaining_references = {
-                    let mut sandbox_tracker = self.sandbox_tracker.lock().await;
-                    sandbox_tracker.decrement_reference(&sandbox_id)
+            Request::UnrefSandbox {
+                task_id,
+                sandbox_id,
+            } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let remaining_references = match tcg {
+                    Some(tcg) => {
+                        let mut tcg = tcg.lock().await;
+                        tcg.decrement_sandbox_reference(&sandbox_id)
+                    }
+                    None => 0,
                 };
 
                 Response::UnrefSandboxResult {
@@ -213,16 +233,20 @@ impl RequestHandler {
             } => {
                 let sandbox_ids_recorded = sandbox_eviction_records.len() as u32;
 
-                {
-                    let mut sandbox_tracker = self.sandbox_tracker.lock().await;
-                    let sandbox_ids = sandbox_eviction_records
-                        .iter()
-                        .map(|record| {
-                            let _ = (&record.task_id, &record.sandbox_path);
-                            record.sandbox_id.clone()
-                        })
-                        .collect::<Vec<String>>();
-                    sandbox_tracker.record_many(&sandbox_ids);
+                // Resolve all TCG arcs in one cache lock, then lock TCGs one at a time.
+                // get_tcg (creating) is intentional: a record for an unknown task_id still
+                // lands in a victim list so the id flows back out through drain.
+                let records_with_tcgs = {
+                    let mut cache = self.cache.lock().await;
+                    sandbox_eviction_records
+                        .into_iter()
+                        .map(|record| (cache.get_tcg(record.task_id.clone()), record))
+                        .collect::<Vec<_>>()
+                };
+
+                for (tcg, record) in records_with_tcgs {
+                    let mut tcg = tcg.lock().await;
+                    tcg.mark_sandbox_evicted(&record.sandbox_path, &record.sandbox_id);
                 }
 
                 Response::MarkSandboxesEvictedResult {
@@ -230,22 +254,37 @@ impl RequestHandler {
                 }
             }
             Request::ListSandboxCandidates { limit } => {
-                let limit = if limit == 0 { 10 } else { limit } as usize;
-                let mut candidates = Vec::<SandboxCandidate>::new();
+                // Ascending lpm-hit score: the least useful sandboxes first, for eviction.
+                let candidates = self.collect_sorted_candidates(limit, false).await;
+
+                Response::SandboxCandidates { candidates }
+            }
+            Request::ListHotSandboxes { limit } => {
+                // Descending lpm-hit score: the most useful sandboxes first, for
+                // proactive forking before a training iteration.
+                let candidates = self.collect_sorted_candidates(limit, true).await;
+
+                Response::SandboxCandidates { candidates }
+            }
+            Request::DrainReclaimableSandboxes => {
                 let entries = {
                     let cache = self.cache.lock().await;
                     cache.entries_snapshot()
                 };
 
+                let mut sandboxes = Vec::new();
+
                 for (task_id, tcg) in entries {
-                    let tcg = tcg.lock().await;
-                    candidates.extend(tcg.collect_sandbox_candidates(&task_id));
+                    let mut tcg = tcg.lock().await;
+                    let drained = tcg.drain_reclaimable_sandboxes();
+
+                    sandboxes.extend(drained.into_iter().map(|sandbox_id| ReclaimableSandbox {
+                        task_id: task_id.clone(),
+                        sandbox_id,
+                    }));
                 }
 
-                candidates.sort_by_key(|candidate| candidate.score);
-                candidates.truncate(limit);
-
-                Response::SandboxCandidates { candidates }
+                Response::ReclaimableSandboxes { sandboxes }
             }
         }
     }
@@ -308,6 +347,24 @@ impl RequestHandler {
                 protocol_primitives::write_u8(stream, 7).await?;
                 self.write_sandbox_candidates(stream, &candidates).await?;
             }
+            Response::ReclaimableSandboxes { sandboxes } => {
+                protocol_primitives::write_u8(stream, 8).await?;
+
+                // u32 length: a large TTL sweep can produce more than u16::MAX victims.
+                let sandbox_count = u32::try_from(sandboxes.len()).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("too many reclaimable sandboxes for u32 length: {error}"),
+                    )
+                })?;
+
+                protocol_primitives::write_u32(stream, sandbox_count).await?;
+
+                for sandbox in &sandboxes {
+                    protocol_primitives::write_string_u16(stream, &sandbox.task_id).await?;
+                    protocol_primitives::write_string_u16(stream, &sandbox.sandbox_id).await?;
+                }
+            }
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
@@ -319,6 +376,32 @@ impl RequestHandler {
         }
 
         Ok(())
+    }
+
+    async fn collect_sorted_candidates(
+        &self,
+        limit: u16,
+        descending: bool,
+    ) -> Vec<SandboxCandidate> {
+        let limit = if limit == 0 { 10 } else { limit } as usize;
+        let mut candidates = Vec::<SandboxCandidate>::new();
+        let entries = {
+            let cache = self.cache.lock().await;
+            cache.entries_snapshot()
+        };
+
+        for (task_id, tcg) in entries {
+            let tcg = tcg.lock().await;
+            candidates.extend(tcg.collect_sandbox_candidates(&task_id));
+        }
+
+        candidates.sort_by_key(|candidate| candidate.score);
+        if descending {
+            candidates.reverse();
+        }
+        candidates.truncate(limit);
+
+        candidates
     }
 
     async fn read_sandbox_eviction_records(

@@ -2,7 +2,7 @@ use crate::{
     eviction::{EvictionPolicyConfig, EvictionResult},
     tcg::Node,
     tvcache::TVCache,
-    types::{CacheSharedObject, CacheSnapshotObject, SandboxTrackerSharedObject},
+    types::{CacheSharedObject, CacheSnapshotObject},
     utils,
 };
 
@@ -155,17 +155,17 @@ async fn prune_cache_to_fit(
         tcg.number_of_sandboxes -= candidate_result.sandboxes_removed;
         tcg.size_in_bytes -= candidate_result.size_removed_in_bytes;
 
+        // The trie node is gone, but the actual sandbox is only deleted once the
+        // deletion loop drains it with a zero reference count.
+        tcg.add_reclaimable_sandboxes(&candidate_result.sandbox_ids_removed);
+
         eviction_result.update(candidate_result);
     }
 
     // while evicting, update the parent tcg's total bytes value
 }
 
-pub async fn enforce(
-    cache: CacheSharedObject,
-    config: &EvictionPolicyConfig,
-    sandbox_tracker: SandboxTrackerSharedObject,
-) -> EvictionResult {
+pub async fn enforce(cache: CacheSharedObject, config: &EvictionPolicyConfig) -> EvictionResult {
     let mut result = EvictionResult::default();
     let entries = {
         let cache = cache.lock().await;
@@ -182,6 +182,10 @@ pub async fn enforce(
         tcg.number_of_sandboxes -= tcg_result.sandboxes_removed;
         tcg.size_in_bytes -= tcg_result.size_removed_in_bytes;
 
+        // The trie nodes are gone, but the actual sandboxes are only deleted once
+        // the deletion loop drains them with a zero reference count.
+        tcg.add_reclaimable_sandboxes(&tcg_result.sandbox_ids_removed);
+
         result.update(tcg_result);
     }
 
@@ -196,11 +200,6 @@ pub async fn enforce(
 
     let _low_watermark_mb = config.low_watermark_mb;
     let _total_tcgs = entries.len();
-
-    if !result.sandbox_ids_removed.is_empty() {
-        let mut sandbox_tracker = sandbox_tracker.lock().await;
-        sandbox_tracker.record_many(&result.sandbox_ids_removed);
-    }
 
     result
 }

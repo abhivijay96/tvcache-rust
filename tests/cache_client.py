@@ -15,6 +15,8 @@ DUMP_ALL_REQUEST = 3
 UNREF_SANDBOX_REQUEST = 4
 MARK_SANDBOXES_EVICTED_REQUEST = 5
 LIST_SANDBOX_CANDIDATES_REQUEST = 6
+DRAIN_RECLAIMABLE_SANDBOXES_REQUEST = 7
+LIST_HOT_SANDBOXES_REQUEST = 8
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
@@ -23,6 +25,7 @@ JSON_RESPONSE = 4
 UNREF_SANDBOX_RESULT_RESPONSE = 5
 MARK_SANDBOXES_EVICTED_RESULT_RESPONSE = 6
 SANDBOX_CANDIDATES_RESPONSE = 7
+RECLAIMABLE_SANDBOXES_RESPONSE = 8
 
 
 def write_u8(value: int) -> bytes:
@@ -73,7 +76,7 @@ def encode_insert(
     encoded = write_u8(INSERT_REQUEST)
     encoded += write_string_u16(task_id)
     encoded += write_path(path)
-    encoded += write_u16(runtime)
+    encoded += write_u32(runtime)
 
     encoded += write_bool(value is not None)
     if value is not None:
@@ -98,8 +101,12 @@ def encode_dump_all() -> bytes:
     return write_u8(DUMP_ALL_REQUEST)
 
 
-def encode_unref_sandbox(sandbox_id: str) -> bytes:
-    return write_u8(UNREF_SANDBOX_REQUEST) + write_string_u16(sandbox_id)
+def encode_unref_sandbox(task_id: str, sandbox_id: str) -> bytes:
+    return (
+        write_u8(UNREF_SANDBOX_REQUEST)
+        + write_string_u16(task_id)
+        + write_string_u16(sandbox_id)
+    )
 
 
 def write_sandbox_eviction_record(record: dict[str, Any]) -> bytes:
@@ -119,6 +126,14 @@ def encode_mark_sandboxes_evicted(records: list[dict[str, Any]]) -> bytes:
 
 def encode_list_sandbox_candidates(limit: int = 10) -> bytes:
     return write_u8(LIST_SANDBOX_CANDIDATES_REQUEST) + write_u16(limit)
+
+
+def encode_drain_reclaimable_sandboxes() -> bytes:
+    return write_u8(DRAIN_RECLAIMABLE_SANDBOXES_REQUEST)
+
+
+def encode_list_hot_sandboxes(limit: int = 10) -> bytes:
+    return write_u8(LIST_HOT_SANDBOXES_REQUEST) + write_u16(limit)
 
 
 def read_exact(sock: socket.socket, size: int) -> bytes:
@@ -249,6 +264,19 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "candidates": read_sandbox_candidates(sock),
         }
 
+    if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
+        count = read_u32(sock)
+        return {
+            "type": "reclaimable_sandboxes",
+            "sandboxes": [
+                {
+                    "task_id": read_string_u16(sock),
+                    "sandbox_id": read_string_u16(sock),
+                }
+                for _ in range(count)
+            ],
+        }
+
     raise ValueError(f"unknown response type: {response_type}")
 
 
@@ -298,14 +326,20 @@ class CacheClient:
     def dump_all_response(self) -> dict[str, Any]:
         return self.send_request(encode_dump_all())
 
-    def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
-        return self.send_request(encode_unref_sandbox(sandbox_id))
+    def unref_sandbox(self, task_id: str, sandbox_id: str) -> dict[str, Any]:
+        return self.send_request(encode_unref_sandbox(task_id, sandbox_id))
 
     def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         return self.send_request(encode_mark_sandboxes_evicted(records))
 
     def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_sandbox_candidates(limit))
+
+    def drain_reclaimable_sandboxes(self) -> dict[str, Any]:
+        return self.send_request(encode_drain_reclaimable_sandboxes())
+
+    def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
+        return self.send_request(encode_list_hot_sandboxes(limit))
 
     def dump_all(self) -> object:
         response = self.dump_all_response()
@@ -380,14 +414,20 @@ class PersistentCacheClient:
     def dump_all_response(self) -> dict[str, Any]:
         return self.send_request(encode_dump_all())
 
-    def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
-        return self.send_request(encode_unref_sandbox(sandbox_id))
+    def unref_sandbox(self, task_id: str, sandbox_id: str) -> dict[str, Any]:
+        return self.send_request(encode_unref_sandbox(task_id, sandbox_id))
 
     def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         return self.send_request(encode_mark_sandboxes_evicted(records))
 
     def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_sandbox_candidates(limit))
+
+    def drain_reclaimable_sandboxes(self) -> dict[str, Any]:
+        return self.send_request(encode_drain_reclaimable_sandboxes())
+
+    def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
+        return self.send_request(encode_list_hot_sandboxes(limit))
 
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
@@ -516,6 +556,19 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
             "candidates": await async_read_sandbox_candidates(reader),
         }
 
+    if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
+        count = await async_read_u32(reader)
+        return {
+            "type": "reclaimable_sandboxes",
+            "sandboxes": [
+                {
+                    "task_id": await async_read_string_u16(reader),
+                    "sandbox_id": await async_read_string_u16(reader),
+                }
+                for _ in range(count)
+            ],
+        }
+
     raise ValueError(f"unknown response type: {response_type}")
 
 
@@ -592,11 +645,17 @@ class AsyncPersistentCacheClient:
     async def dump_all_response(self) -> dict[str, Any]:
         return await self.send_request(encode_dump_all())
 
-    async def unref_sandbox(self, sandbox_id: str) -> dict[str, Any]:
-        return await self.send_request(encode_unref_sandbox(sandbox_id))
+    async def unref_sandbox(self, task_id: str, sandbox_id: str) -> dict[str, Any]:
+        return await self.send_request(encode_unref_sandbox(task_id, sandbox_id))
 
     async def mark_sandboxes_evicted(self, records: list[dict[str, Any]]) -> dict[str, Any]:
         return await self.send_request(encode_mark_sandboxes_evicted(records))
 
     async def list_sandbox_candidates(self, limit: int = 10) -> dict[str, Any]:
         return await self.send_request(encode_list_sandbox_candidates(limit))
+
+    async def drain_reclaimable_sandboxes(self) -> dict[str, Any]:
+        return await self.send_request(encode_drain_reclaimable_sandboxes())
+
+    async def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
+        return await self.send_request(encode_list_hot_sandboxes(limit))

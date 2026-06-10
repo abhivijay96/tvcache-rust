@@ -26,6 +26,11 @@ impl TVCache {
         )
     }
 
+    pub fn peek_tcg(&self, key: &str) -> Option<TcgSharedObject> {
+        // Non-creating lookup, so requests for unknown task ids do not allocate a TCG.
+        self.tcgs.get(key).map(Arc::clone)
+    }
+
     pub fn entries_snapshot(&self) -> CacheSnapshotObject {
         let mut result = Vec::<(String, TcgSharedObject)>::new();
 

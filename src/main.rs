@@ -10,13 +10,13 @@ mod utils;
 use std::sync::Arc;
 use std::{env, io};
 
-use eviction::{sandbox_tracker::SandboxTracker, EvictionPolicyConfig, EvictionPolicyName};
+use eviction::{EvictionPolicyConfig, EvictionPolicyName};
 use request_handler::RequestHandler;
 use tokio::{net::TcpListener, sync::Mutex};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 use tvcache::TVCache;
-use types::{CacheSharedObject, SandboxTrackerSharedObject};
+use types::CacheSharedObject;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -26,18 +26,10 @@ async fn main() -> io::Result<()> {
     let eviction_policy_config = parse_eviction_policy_config();
 
     let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(TVCache::new()));
-    let sandbox_tracker_shared_object: SandboxTrackerSharedObject =
-        Arc::new(Mutex::new(SandboxTracker::new()));
     let eviction_cache = Arc::clone(&cache_shared_object);
-    let eviction_sandbox_tracker = Arc::clone(&sandbox_tracker_shared_object);
 
     tokio::spawn(async move {
-        cache_policy_enforcer::run_eviction_loop(
-            eviction_cache,
-            eviction_policy_config,
-            eviction_sandbox_tracker,
-        )
-        .await;
+        cache_policy_enforcer::run_eviction_loop(eviction_cache, eviction_policy_config).await;
     });
 
     info!("listening on 127.0.0.1:7878 with tokio");
@@ -46,12 +38,10 @@ async fn main() -> io::Result<()> {
         match listener.accept().await {
             Ok((tcp_stream, _ /*this is socket attress but I am nto usin this */)) => {
                 let cache_shared_object = Arc::clone(&cache_shared_object);
-                let sandbox_tracker_shared_object = Arc::clone(&sandbox_tracker_shared_object);
                 let stream = tcp_stream;
 
                 tokio::spawn(async move {
-                    let request_handler =
-                        RequestHandler::new(cache_shared_object, sandbox_tracker_shared_object);
+                    let request_handler = RequestHandler::new(cache_shared_object);
                     request_handler.handle_stream(stream).await;
                 });
             }

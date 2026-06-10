@@ -3,6 +3,7 @@ use crate::types::SandboxCandidate;
 use crate::utils;
 use serde::Serialize;
 use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ToolCallGraph {
@@ -10,6 +11,13 @@ pub struct ToolCallGraph {
     pub number_of_nodes: u32,
     pub number_of_sandboxes: u32,
     pub size_in_bytes: u64,
+    // sandbox_id -> reference count; only positive counts are stored, an
+    // absent entry means a count of zero.
+    pub sandbox_references: BTreeMap<String, u32>,
+    // Sandboxes marked for eviction (by the sandbox manager or the internal
+    // eviction loop) that are waiting to be handed to the deletion loop via
+    // drain_reclaimable_sandboxes once their reference count is zero.
+    pub reclaimable_sandboxes: BTreeSet<String>,
 }
 
 impl ToolCallGraph {
@@ -22,7 +30,7 @@ impl ToolCallGraph {
         path: Vec<String>,
         value: Option<String>,
         sandbox_id: Option<String>,
-        runtime: u16,
+        runtime: u32,
         ttl: Option<u32>,
         ttl_exists: bool,
     ) -> (bool, bool) {
@@ -160,6 +168,86 @@ impl ToolCallGraph {
 
         candidates
     }
+
+    pub fn increment_sandbox_reference(&mut self, sandbox_id: &str) -> u32 {
+        let reference_count = self
+            .sandbox_references
+            .entry(sandbox_id.to_string())
+            .or_insert(0);
+        *reference_count += 1;
+        *reference_count
+    }
+
+    pub fn decrement_sandbox_reference(&mut self, sandbox_id: &str) -> u32 {
+        let Some(reference_count) = self.sandbox_references.get_mut(sandbox_id) else {
+            return 0;
+        };
+
+        *reference_count -= 1;
+
+        if *reference_count == 0 {
+            self.sandbox_references.remove(sandbox_id);
+            return 0;
+        }
+
+        *reference_count
+    }
+
+    pub fn add_reclaimable_sandboxes(&mut self, sandbox_ids: &[String]) {
+        for sandbox_id in sandbox_ids {
+            self.reclaimable_sandboxes.insert(sandbox_id.clone());
+        }
+    }
+
+    pub fn mark_sandbox_evicted(&mut self, sandbox_path: &[String], sandbox_id: &str) {
+        // Always record the victim, even if the node is gone or mismatched,
+        // so the id flows back to the deletion loop through drain instead of leaking.
+        self.reclaimable_sandboxes.insert(sandbox_id.to_string());
+
+        let mut curr: &mut Node = &mut self.root;
+
+        for p in sandbox_path {
+            if let Some(next) = curr.children.get_mut(p) {
+                curr = next;
+            } else {
+                // Node already removed (e.g. by the internal eviction loop).
+                return;
+            }
+        }
+
+        // as_deref turns Option<String> into Option<&str> for an allocation-free compare.
+        if sandbox_path.is_empty() || curr.sandbox_id.as_deref() != Some(sandbox_id) {
+            return;
+        }
+
+        curr.sandbox_id = None;
+        self.number_of_sandboxes -= 1;
+
+        let path_entry_size_in_bytes = sandbox_path
+            .last()
+            .map_or(0, |path_entry| path_entry.len() as u32);
+        let old_size_in_bytes = curr.size_in_bytes;
+        curr.update_size_in_bytes(path_entry_size_in_bytes);
+        self.size_in_bytes =
+            self.size_in_bytes - old_size_in_bytes as u64 + curr.size_in_bytes as u64;
+    }
+
+    pub fn drain_reclaimable_sandboxes(&mut self) -> Vec<String> {
+        // Victims still referenced by a rollout stay in the set for a later drain.
+        let sandbox_references = &self.sandbox_references;
+        let mut ready = Vec::new();
+
+        self.reclaimable_sandboxes.retain(|sandbox_id| {
+            if sandbox_references.contains_key(sandbox_id) {
+                true
+            } else {
+                ready.push(sandbox_id.clone());
+                false
+            }
+        });
+
+        ready
+    }
 }
 
 fn collect_sandbox_candidates_recursive(
@@ -185,4 +273,3 @@ fn collect_sandbox_candidates_recursive(
 }
 
 // TODO: Write TTL and then pruning logic and persistence
-// also If I have returned a sandbox id during insertion, I want to be able to prevent from removing that sandbox because someone might be copying the sandbox. also I want to maintain an evicted sandbox id list
