@@ -212,7 +212,7 @@ impl ToolCallGraph {
             if let Some(next) = curr.children.get_mut(p) {
                 curr = next;
             } else {
-                // Node already removed (e.g. by the internal eviction loop).
+                // Node already removed (this can happen by TTL eviction or TCG size based eviction that runs in the background).
                 return;
             }
         }
@@ -228,8 +228,11 @@ impl ToolCallGraph {
         let path_entry_size_in_bytes = sandbox_path
             .last()
             .map_or(0, |path_entry| path_entry.len() as u32);
+
         let old_size_in_bytes = curr.size_in_bytes;
+
         curr.update_size_in_bytes(path_entry_size_in_bytes);
+
         self.size_in_bytes =
             self.size_in_bytes - old_size_in_bytes as u64 + curr.size_in_bytes as u64;
     }
@@ -254,6 +257,7 @@ impl ToolCallGraph {
     pub fn record_fork_cost(&mut self, sample_ms: u32) -> u32 {
         // Integer EMA with alpha = 0.3; the first sample seeds it. u64
         // intermediate so 7 * ema cannot overflow u32.
+        // EMA means exponential moving average.
         if self.fork_cost_ema_ms == 0 {
             self.fork_cost_ema_ms = sample_ms;
         } else {

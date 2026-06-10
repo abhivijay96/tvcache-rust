@@ -455,6 +455,7 @@ impl RequestHandler {
         descending: bool,
     ) -> Vec<SandboxCandidate> {
         let limit = if limit == 0 { 10 } else { limit } as usize;
+
         let mut candidates = Vec::<SandboxCandidate>::new();
         let entries = {
             let cache = self.cache.lock().await;
