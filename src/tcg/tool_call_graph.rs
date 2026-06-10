@@ -14,10 +14,8 @@ pub struct ToolCallGraph {
     // sandbox_id -> reference count; only positive counts are stored, an
     // absent entry means a count of zero.
     pub sandbox_references: BTreeMap<String, u32>,
-    // Sandboxes marked for eviction (by the sandbox manager or the internal
-    // eviction loop) that are waiting to be handed to the deletion loop via
-    // drain_reclaimable_sandboxes once their reference count is zero.
-    pub reclaimable_sandboxes: BTreeSet<String>,
+    pub reclaimable_sandboxes: BTreeSet<String>, // Sandboxes marked for eviction (by the sandbox manager or the internal eviction loop) that are waiting to be handed to the deletion loop
+    pub fork_cost_ema_ms: u32, // EMA of client-reported sandbox fork times for this task, in milliseconds, u32 is ok here because, it can store up to 4 million seconds which is > 40 days.
 }
 
 impl ToolCallGraph {
@@ -53,32 +51,36 @@ impl ToolCallGraph {
                 let path_entry_size_in_bytes = p.len() as u32;
                 let mut sandbox_id_consumed = false;
 
-                let (new_node, old_size_in_bytes) = match curr.children.entry(p) {
+                let (new_node, old_size_in_bytes, is_new_node) = match curr.children.entry(p) {
                     Entry::Occupied(entry) => {
                         let node = entry.into_mut();
                         let old_size_in_bytes = node.size_in_bytes;
 
-                        (node, old_size_in_bytes)
+                        (node, old_size_in_bytes, false)
                     }
                     Entry::Vacant(entry) => {
                         self.number_of_nodes += 1;
 
-                        (entry.insert(Node::default()), 0)
+                        (entry.insert(Node::default()), 0, true)
                     }
                 };
 
-                new_node.inserted_at_seconds = utils::current_utc_seconds();
-                new_node.value = value;
-                new_node.runtime = runtime;
-                new_node.ttl_present = ttl_exists;
+                // Merge semantics: absent fields leave existing node state
+                // untouched, so a sandbox-only insert cannot destroy a cached
+                // value or clear a TTL. New nodes start from Node::default(),
+                // so the same arms fully initialize them.
+                if is_new_node || value.is_some() {
+                    new_node.inserted_at_seconds = utils::current_utc_seconds();
+                    new_node.value = value;
+                    new_node.runtime = runtime;
+                }
 
-                if let Some(ttl_value) = ttl {
-                    // assert that ttl_present is true
-                    assert!(
-                        new_node.ttl_present,
-                        "ttl_present should be true when ttl has a value"
-                    );
-                    new_node.ttl = ttl_value;
+                if ttl_exists {
+                    new_node.ttl_present = true;
+
+                    if let Some(ttl) = ttl {
+                        new_node.ttl = ttl;
+                    }
                 }
 
                 if sandbox_id.is_some() && new_node.sandbox_id.is_none() {
@@ -247,6 +249,19 @@ impl ToolCallGraph {
         });
 
         ready
+    }
+
+    pub fn record_fork_cost(&mut self, sample_ms: u32) -> u32 {
+        // Integer EMA with alpha = 0.3; the first sample seeds it. u64
+        // intermediate so 7 * ema cannot overflow u32.
+        if self.fork_cost_ema_ms == 0 {
+            self.fork_cost_ema_ms = sample_ms;
+        } else {
+            self.fork_cost_ema_ms =
+                ((7 * self.fork_cost_ema_ms as u64 + 3 * sample_ms as u64) / 10) as u32;
+        }
+
+        self.fork_cost_ema_ms
     }
 }
 

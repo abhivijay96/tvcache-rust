@@ -48,6 +48,13 @@ pub enum Request {
     ListHotSandboxes {
         limit: u16,
     },
+    ReportForkCost {
+        task_id: String,
+        fork_cost_ms: u32,
+    },
+    GetForkCost {
+        task_id: String,
+    },
 }
 
 pub enum Response {
@@ -71,6 +78,9 @@ pub enum Response {
     },
     ReclaimableSandboxes {
         sandboxes: Vec<ReclaimableSandbox>,
+    },
+    ForkCost {
+        fork_cost_ms: u32,
     },
     Error {
         message: String,

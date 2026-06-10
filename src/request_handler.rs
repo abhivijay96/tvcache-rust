@@ -136,6 +136,22 @@ impl RequestHandler {
                 Ok(Request::ListHotSandboxes { limit })
             }
 
+            9 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let fork_cost_ms = protocol_primitives::read_u32(stream).await?;
+
+                Ok(Request::ReportForkCost {
+                    task_id,
+                    fork_cost_ms,
+                })
+            }
+
+            10 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+
+                Ok(Request::GetForkCost { task_id })
+            }
+
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown request type: {request_type}"),
@@ -286,6 +302,42 @@ impl RequestHandler {
 
                 Response::ReclaimableSandboxes { sandboxes }
             }
+            Request::ReportForkCost {
+                task_id,
+                fork_cost_ms,
+            } => {
+                // get_tcg (creating) so the first samples for a task (e.g. fork
+                // bank warm-up) are kept even before any insert.
+                let tcg = {
+                    let mut cache = self.cache.lock().await;
+                    cache.get_tcg(task_id)
+                };
+
+                let updated_ema = {
+                    let mut tcg = tcg.lock().await;
+                    tcg.record_fork_cost(fork_cost_ms)
+                };
+
+                Response::ForkCost {
+                    fork_cost_ms: updated_ema,
+                }
+            }
+            Request::GetForkCost { task_id } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let fork_cost_ms = match tcg {
+                    Some(tcg) => {
+                        let tcg = tcg.lock().await;
+                        tcg.fork_cost_ema_ms
+                    }
+                    None => 0,
+                };
+
+                Response::ForkCost { fork_cost_ms }
+            }
         }
     }
 
@@ -364,6 +416,10 @@ impl RequestHandler {
                     protocol_primitives::write_string_u16(stream, &sandbox.task_id).await?;
                     protocol_primitives::write_string_u16(stream, &sandbox.sandbox_id).await?;
                 }
+            }
+            Response::ForkCost { fork_cost_ms } => {
+                protocol_primitives::write_u8(stream, 9).await?;
+                protocol_primitives::write_u32(stream, fork_cost_ms).await?;
             }
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
