@@ -185,6 +185,7 @@ impl RequestHandler {
                     sandbox_inserted,
                 }
             }
+
             Request::Find { task_id, path } => {
                 let tcg = {
                     let mut cache = self.cache.lock().await;
@@ -208,6 +209,7 @@ impl RequestHandler {
                     }
                 }
             }
+
             Request::DumpAll => {
                 let entries = {
                     let cache = self.cache.lock().await;
@@ -223,6 +225,7 @@ impl RequestHandler {
                     },
                 }
             }
+
             Request::UnrefSandbox {
                 task_id,
                 sandbox_id,
@@ -244,14 +247,13 @@ impl RequestHandler {
                     remaining_references,
                 }
             }
+
             Request::MarkSandboxesEvicted {
                 sandbox_eviction_records,
             } => {
                 let sandbox_ids_recorded = sandbox_eviction_records.len() as u32;
 
-                // Resolve all TCG arcs in one cache lock, then lock TCGs one at a time.
-                // get_tcg (creating) is intentional: a record for an unknown task_id still
-                // lands in a victim list so the id flows back out through drain.
+                // Make a list of tuples, (sandbox eviction record, tcg). Using this list, the next loop will lock the tcg and mark the sandbox as evicted.
                 let records_with_tcgs = {
                     let mut cache = self.cache.lock().await;
                     sandbox_eviction_records
@@ -269,12 +271,14 @@ impl RequestHandler {
                     sandbox_ids_recorded,
                 }
             }
+
             Request::ListSandboxCandidates { limit } => {
                 // Ascending lpm-hit score: the least useful sandboxes first, for eviction.
                 let candidates = self.collect_sorted_candidates(limit, false).await;
 
                 Response::SandboxCandidates { candidates }
             }
+
             Request::ListHotSandboxes { limit } => {
                 // Descending lpm-hit score: the most useful sandboxes first, for
                 // proactive forking before a training iteration.
@@ -282,6 +286,7 @@ impl RequestHandler {
 
                 Response::SandboxCandidates { candidates }
             }
+
             Request::DrainReclaimableSandboxes => {
                 let entries = {
                     let cache = self.cache.lock().await;
@@ -302,6 +307,7 @@ impl RequestHandler {
 
                 Response::ReclaimableSandboxes { sandboxes }
             }
+
             Request::ReportForkCost {
                 task_id,
                 fork_cost_ms,
@@ -322,6 +328,7 @@ impl RequestHandler {
                     fork_cost_ms: updated_ema,
                 }
             }
+
             Request::GetForkCost { task_id } => {
                 let tcg = {
                     let cache = self.cache.lock().await;
@@ -355,6 +362,7 @@ impl RequestHandler {
                 protocol_primitives::write_bool(stream, value_inserted).await?;
                 protocol_primitives::write_bool(stream, sandbox_inserted).await?;
             }
+
             Response::FindResult {
                 value,
                 sandbox_path,
@@ -383,22 +391,26 @@ impl RequestHandler {
                     protocol_primitives::write_bool(stream, false).await?;
                 }
             }
+
             Response::UnrefSandboxResult {
                 remaining_references,
             } => {
                 protocol_primitives::write_u8(stream, 5).await?;
                 protocol_primitives::write_u32(stream, remaining_references).await?;
             }
+
             Response::MarkSandboxesEvictedResult {
                 sandbox_ids_recorded,
             } => {
                 protocol_primitives::write_u8(stream, 6).await?;
                 protocol_primitives::write_u32(stream, sandbox_ids_recorded).await?;
             }
+
             Response::SandboxCandidates { candidates } => {
                 protocol_primitives::write_u8(stream, 7).await?;
                 self.write_sandbox_candidates(stream, &candidates).await?;
             }
+
             Response::ReclaimableSandboxes { sandboxes } => {
                 protocol_primitives::write_u8(stream, 8).await?;
 
@@ -417,14 +429,17 @@ impl RequestHandler {
                     protocol_primitives::write_string_u16(stream, &sandbox.sandbox_id).await?;
                 }
             }
+
             Response::ForkCost { fork_cost_ms } => {
                 protocol_primitives::write_u8(stream, 9).await?;
                 protocol_primitives::write_u32(stream, fork_cost_ms).await?;
             }
+
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
             }
+
             Response::Json { json } => {
                 protocol_primitives::write_u8(stream, 4).await?;
                 protocol_primitives::write_string_u32(stream, &json).await?;
