@@ -113,9 +113,9 @@ impl ToolCallGraph {
         let mut value_of_path: Option<String> = None;
         let path_len = path.len();
 
-        if let Some(id) = &curr.sandbox_id {
-            sandbox_id = Some(id.clone());
-        }
+        // if let Some(id) = &curr.sandbox_id {
+        //     sandbox_id = Some(id.clone());
+        // } // No need to store root's sandbox id
 
         for p in path {
             if let Some(next) = curr.children.get_mut(&p) {
