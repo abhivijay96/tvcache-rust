@@ -66,9 +66,9 @@ impl ToolCallGraph {
                 };
 
                 // Merge semantics: absent fields leave existing node state
-                // untouched, so a sandbox-only insert cannot destroy a cached
+                // untouched, so an insert with only sandbox cannot destroy a cached
                 // value or clear a TTL. New nodes start from Node::default(),
-                // so the same arms fully initialize them.
+                // so the same code will fully initialize them.
                 if is_new_node || value.is_some() {
                     new_node.inserted_at_seconds = utils::current_utc_seconds();
                     new_node.value = value;
@@ -137,21 +137,19 @@ impl ToolCallGraph {
             }
         }
 
-        if value_of_path.is_none() {
-            if sandbox_id.is_some() {
-                let mut sandbox_node = &mut self.root;
+        if value_of_path.is_none() && sandbox_id.is_some() {
+            let mut sandbox_node = &mut self.root;
 
-                for p in sandbox_path.as_ref().expect("Sandbox path is invalid") {
-                    sandbox_node = sandbox_node
-                        .children
-                        .get_mut(p)
-                        .expect("The LPM path that should be valid is empty now");
-                }
-
-                // if we start seeing errors here, lets add more logs and reproduce it.
-
-                sandbox_node.number_of_lpm_hits += 1;
+            for p in sandbox_path.as_ref().expect("Sandbox path is invalid") {
+                sandbox_node = sandbox_node
+                    .children
+                    .get_mut(p)
+                    .expect("The LPM path that should be valid is empty now");
             }
+
+            // if we start seeing errors here, lets add more logs and reproduce it.
+
+            sandbox_node.number_of_lpm_hits += 1;
         }
 
         return (value_of_path, (sandbox_path, sandbox_id));
@@ -290,5 +288,3 @@ fn collect_sandbox_candidates_recursive(
         current_path.pop();
     }
 }
-
-// TODO: Write TTL and then pruning logic and persistence
