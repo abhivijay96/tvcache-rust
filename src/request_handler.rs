@@ -1,14 +1,15 @@
-use std::io;
+use std::{io, sync::Mutex};
 
 use tokio::net::TcpStream;
 use tracing::error;
 
 use crate::{
     protocol_primitives,
+    tcg::ToolCallGraph,
     tvcache::tcg_entries_to_json,
     types::{
         CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
-        SandboxEvictionRecord,
+        SandboxEvictionRecord, TcgSharedObject,
     },
 };
 
@@ -253,9 +254,20 @@ impl RequestHandler {
             } => {
                 let sandbox_ids_recorded = sandbox_eviction_records.len() as u32;
 
-                // Make a list of tuples, (sandbox eviction record, tcg). Using this list, the next loop will lock the tcg and mark the sandbox as evicted.
+                // Make a list of tuples, (sandbox eviction record, tcg). Using this list, the next loop will lock the tcg and mark the sandbox as evicted. I am using the idiomatic rust syntax to learn
+                // if we would use traditional style, we would use the code below.
+
+                // let mut records_with_tcgs = Vec::<(TcgSharedObject, SandboxEvictionRecord)>::new();
+
+                // let mut cache = self.cache.lock().await;
+
+                // for record in sandbox_eviction_records {
+                //     records_with_tcgs.push((cache.get_tcg(record.task_id.clone()), record));
+                // }
+
                 let records_with_tcgs = {
                     let mut cache = self.cache.lock().await;
+
                     sandbox_eviction_records
                         .into_iter()
                         .map(|record| (cache.get_tcg(record.task_id.clone()), record))
