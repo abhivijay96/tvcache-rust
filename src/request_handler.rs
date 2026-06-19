@@ -1,15 +1,14 @@
-use std::{io, sync::Mutex};
+use std::io;
 
 use tokio::net::TcpStream;
 use tracing::error;
 
 use crate::{
     protocol_primitives,
-    tcg::ToolCallGraph,
     tvcache::tcg_entries_to_json,
     types::{
         CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
-        SandboxEvictionRecord, TcgSharedObject,
+        SandboxEvictionRecord,
     },
 };
 
