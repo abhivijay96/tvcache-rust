@@ -31,6 +31,7 @@ impl ToolCallGraph {
         runtime: u32,
         ttl: Option<u32>,
         ttl_exists: bool,
+        embedding: Option<Vec<f32>>,
     ) -> (bool, bool) {
         if path.is_empty() {
             return (false, false);
@@ -87,6 +88,11 @@ impl ToolCallGraph {
                     new_node.sandbox_id = sandbox_id;
                     self.number_of_sandboxes += 1;
                     sandbox_id_consumed = true;
+                }
+
+                // A tool call's embedding never changes, so keep the first one.
+                if embedding.is_some() && new_node.embedding.is_none() {
+                    new_node.embedding = embedding;
                 }
 
                 new_node.update_size_in_bytes(path_entry_size_in_bytes);

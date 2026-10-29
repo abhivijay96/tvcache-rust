@@ -47,6 +47,7 @@ impl RequestHandler {
                 let mut value = None;
                 let mut sandbox_id = None;
                 let mut ttl: Option<u32> = None;
+                let mut embedding = None;
 
                 let runtime = protocol_primitives::read_u32(stream).await?;
 
@@ -84,6 +85,17 @@ impl RequestHandler {
                     ));
                 }
 
+                let embedding_exists = protocol_primitives::read_u8(stream).await?;
+
+                if embedding_exists == 1 {
+                    embedding = Some(protocol_primitives::read_embedding(stream).await?);
+                } else if embedding_exists != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid embedding exists flag: {embedding_exists}"),
+                    ));
+                }
+
                 Ok(Request::Insert {
                     task_id,
                     path,
@@ -92,6 +104,7 @@ impl RequestHandler {
                     runtime,
                     ttl,
                     ttl_present: ttl_exists == 1,
+                    embedding,
                 })
             }
 
@@ -169,6 +182,7 @@ impl RequestHandler {
                 runtime,
                 ttl_present,
                 ttl,
+                embedding,
             } => {
                 let tcg = {
                     let mut cache = self.cache.lock().await;
@@ -177,7 +191,7 @@ impl RequestHandler {
 
                 let (value_inserted, sandbox_inserted) = {
                     let mut tcg = tcg.lock().await;
-                    tcg.insert(path, value, sandbox_id, runtime, ttl, ttl_present)
+                    tcg.insert(path, value, sandbox_id, runtime, ttl, ttl_present, embedding)
                 };
 
                 Response::InsertResult {

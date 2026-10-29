@@ -32,6 +32,10 @@
       border-right: 1px solid #cfd8d8;
       background: #fff;
       padding: 20px;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
     }
 
     main {
@@ -200,6 +204,7 @@
     }
 
     .node-card {
+      cursor: pointer;
       width: 100%;
       height: 100%;
       border: 1.5px solid #111;
@@ -209,6 +214,42 @@
       box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
       display: grid;
       grid-template-rows: auto 1fr;
+    }
+
+    .embedding-values {
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid #cfd8d8;
+      border-radius: 4px;
+      background: #fff;
+      padding: 6px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      white-space: pre;
+    }
+
+    .node-card.selected {
+      border: 4px solid #111;
+    }
+
+    .node-card.similar {
+      border: 4px solid var(--similarity);
+    }
+
+    .similarity-badge {
+      float: right;
+      margin-left: 8px;
+      padding: 1px 7px;
+      border: 2px solid var(--similarity);
+      border-radius: 10px;
+      background: #fff;
+      color: #111;
+      font-size: 11px;
+    }
+
+    .similarity-legend {
+      font-size: 12px;
+      color: #2d3838;
     }
 
     .node-header {
@@ -265,6 +306,8 @@
       aside {
         border-right: 0;
         border-bottom: 1px solid #cfd8d8;
+        position: static;
+        max-height: none;
       }
 
       #chart {
@@ -300,6 +343,15 @@
           <div class="result-row"><strong>Status</strong><span>Select a task and enter a path JSON array.</span></div>
         </div>
       </form>
+      <section class="tool">
+        <h3>Node</h3>
+        <div class="similarity-legend">
+          <span>A thick black outline marks the selected node. Siblings are outlined by embedding similarity, red (0) to green (1).</span>
+        </div>
+        <div id="nodeDetails" class="find-result">
+          <div class="result-row"><strong>Status</strong><span>Click a node to see its attributes.</span></div>
+        </div>
+      </section>
     </aside>
     <main>
       <div class="topbar">
@@ -316,6 +368,7 @@
     const findForm = document.getElementById("findForm");
     const findPathInput = document.getElementById("findPathInput");
     const findResult = document.getElementById("findResult");
+    const nodeDetails = document.getElementById("nodeDetails");
     const chart = document.getElementById("chart");
     const statusEl = document.getElementById("status");
     const titleEl = document.getElementById("title");
@@ -324,6 +377,14 @@
     const taskCountEl = document.getElementById("taskCount");
 
     let tvcache = {};
+
+    // Red through orange to green, with stops blended in OKLCH so the middle isn't brown.
+    function similarityColor(similarity) {
+      return d3.scaleLinear()
+        .domain([0, 0.25, 0.5, 0.625, 0.75, 0.875, 1])
+        .range(["#9b1c1c", "#bd4517", "#dd6b0f", "#c77b00", "#a68b00", "#799800", "#37a04b"])
+        .clamp(true)(similarity);
+    }
 
     function display(value) {
       if (value === null || value === undefined) {
@@ -348,6 +409,7 @@
         sandbox_id: node.sandbox_id ?? null,
         runtime: node.runtime ?? 0,
         child_count: children.length,
+        attributes: node,
         children
       };
     }
@@ -389,10 +451,76 @@
       taskCountEl.textContent = String(taskIds.length);
     }
 
+    function resetNodeDetails() {
+      nodeDetails.innerHTML = `
+        <div class="result-row"><strong>Status</strong><span>Click a node to see its attributes.</span></div>
+      `;
+    }
+
+    function renderNodeDetails(data) {
+      const row = (name, value) =>
+        `<div class="result-row"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(value)}</span></div>`;
+      const { children, embedding, ...fields } = data.attributes;
+      const rows = [row("path", JSON.stringify(data.path))];
+      for (const [name, value] of Object.entries(fields)) {
+        rows.push(row(name, display(value)));
+      }
+
+      if (Array.isArray(embedding)) {
+        const values = embedding.map((value, index) => `${String(index).padStart(3)}: ${value}`).join("\n");
+        rows.push(`
+          <div class="result-row">
+            <strong>embedding (${embedding.length} values)</strong>
+            <div class="embedding-values">${escapeHtml(values)}</div>
+          </div>
+        `);
+      } else {
+        rows.push(row("embedding", display(embedding)));
+      }
+      nodeDetails.innerHTML = rows.join("");
+      nodeDetails.scrollIntoView({ block: "nearest" });
+    }
+
+    function cosineSimilarity(a, b) {
+      let dot = 0, normA = 0, normB = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+      }
+      return dot / Math.sqrt(normA * normB);
+    }
+
+    function highlightNode(selected) {
+      const embedding = selected.data.attributes.embedding;
+
+      d3.select(chart).selectAll(".node-card").each(function (d) {
+        const card = d3.select(this);
+        const other = d.data.attributes.embedding;
+        const comparable = d !== selected && d.parent === selected.parent
+          && Array.isArray(embedding) && Array.isArray(other) && other.length === embedding.length;
+        const score = comparable ? cosineSimilarity(embedding, other) : NaN;
+        // Zero or empty embeddings give NaN, which has no color.
+        const similarity = Number.isFinite(score) ? score : null;
+
+        card.classed("selected", d === selected)
+          .classed("similar", similarity !== null)
+          .style("--similarity", similarity !== null ? similarityColor(similarity) : null);
+        card.select(".similarity-badge").remove();
+        if (similarity !== null) {
+          card.select(".node-header")
+            .insert("span", function () { return this.firstChild; })
+            .attr("class", "similarity-badge")
+            .text(similarity.toFixed(2));
+        }
+      });
+    }
+
     function renderSelectedTask() {
       const taskId = selectedTaskId();
       const graph = tvcache[taskId];
       chart.innerHTML = "";
+      resetNodeDetails();
 
       if (!taskId || !graph) {
         titleEl.textContent = "No TCG selected";
@@ -448,6 +576,8 @@
       svg.call(
         d3.zoom()
           .scaleExtent([0.2, 3])
+          // Lets a slightly shaky click still select a node instead of panning.
+          .clickDistance(4)
           .on("zoom", event => {
             zoomLayer.attr("transform", event.transform);
           })
@@ -473,6 +603,10 @@
         .attr("height", nodeHeight)
         .append("xhtml:div")
         .attr("class", "node-card")
+        .on("click", (event, d) => {
+          renderNodeDetails(d.data);
+          highlightNode(d);
+        })
         .html(d => {
           const data = d.data;
           return `
@@ -548,6 +682,7 @@
 
     refreshButton.addEventListener("click", () => {
       loadCache().catch(error => {
+        resetNodeDetails();
         statusEl.textContent = "Error";
         chart.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });

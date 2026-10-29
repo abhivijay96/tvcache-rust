@@ -65,6 +65,13 @@ def write_path(path: list[str]) -> bytes:
     return encoded
 
 
+def write_embedding(embedding: list[float]) -> bytes:
+    dimension = len(embedding)
+    if not 1 <= dimension <= 0xFFFF:
+        raise ValueError(f"embedding dimension must be between 1 and 65535, got {dimension}")
+    return struct.pack(f">H{dimension}f", dimension, *embedding)
+
+
 def encode_insert(
     task_id: str,
     path: list[str],
@@ -72,6 +79,7 @@ def encode_insert(
     sandbox_id: str | None,
     runtime: int,
     ttl: int | None = None,
+    embedding: list[float] | None = None,
 ) -> bytes:
     encoded = write_u8(INSERT_REQUEST)
     encoded += write_string_u16(task_id)
@@ -89,6 +97,10 @@ def encode_insert(
     encoded += write_bool(ttl is not None)
     if ttl is not None:
         encoded += write_u32(ttl)
+
+    encoded += write_bool(embedding is not None)
+    if embedding is not None:
+        encoded += write_embedding(embedding)
 
     return encoded
 
@@ -317,8 +329,11 @@ class CacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
+        return self.send_request(
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
+        )
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -405,8 +420,11 @@ class PersistentCacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
+        return self.send_request(
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
+        )
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -634,9 +652,10 @@ class AsyncPersistentCacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
         return await self.send_request(
-            encode_insert(task_id, path, value, sandbox_id, runtime, ttl)
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
         )
 
     async def find(self, task_id: str, path: list[str]) -> dict[str, Any]:

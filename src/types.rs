@@ -28,6 +28,7 @@ pub enum Request {
         runtime: u32,
         ttl: Option<u32>,
         ttl_present: bool,
+        embedding: Option<Vec<f32>>,
     },
     Find {
         task_id: String,
