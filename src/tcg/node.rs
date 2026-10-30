@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::mem::{size_of, size_of_val};
 
@@ -12,7 +11,7 @@ pub struct ToolCallEntry {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Node {
-    pub children: HashMap<String, Node>,
+    pub children: Vec<Node>,
     pub sandbox_id: Option<String>,
     pub tool_calls: HashMap<String, ToolCallEntry>,
     pub settled: bool, // if true, this node has been compared with every other settled sibling during contraction
@@ -25,41 +24,50 @@ pub struct Node {
 }
 
 impl Node {
+    fn child_index(&self, key: &str) -> Option<usize> {
+        self.children
+            .iter()
+            .position(|child| child.tool_calls.contains_key(key))
+    }
+
     pub fn child(&self, key: &str) -> Option<&Node> {
-        self.children.get(key)
+        Some(&self.children[self.child_index(key)?])
     }
 
     pub fn child_mut(&mut self, key: &str) -> Option<&mut Node> {
-        self.children.get_mut(key)
+        let index = self.child_index(key)?;
+        Some(&mut self.children[index])
     }
 
     /// Returns the child and whether it was newly created.
     pub fn get_or_create_child(&mut self, key: String) -> (&mut Node, bool) {
-        match self.children.entry(key) {
-            Entry::Occupied(entry) => (entry.into_mut(), false),
-            Entry::Vacant(entry) => {
-                let mut node = Node::default();
-                node.tool_calls
-                    .insert(entry.key().clone(), ToolCallEntry::default());
-                (entry.insert(node), true)
-            }
+        if let Some(index) = self.child_index(&key) {
+            return (&mut self.children[index], false);
         }
+        let mut node = Node::default();
+        node.tool_calls.insert(key, ToolCallEntry::default());
+        self.children.push(node);
+        (self.children.last_mut().unwrap(), true)
     }
 
     pub fn remove_child(&mut self, key: &str) -> Option<Node> {
-        self.children.remove(key)
+        let index = self.child_index(key)?;
+        Some(self.children.remove(index))
     }
 
-    pub fn retain_children<F>(&mut self, mut keep: F)
+    pub fn retain_children<F>(&mut self, keep: F)
     where
         F: FnMut(&mut Node) -> bool,
     {
-        self.children.retain(|_, child| keep(child));
+        self.children.retain_mut(keep);
     }
 
     /// Yields one representative tool-call key and node per child.
     pub fn iter_children(&self) -> impl Iterator<Item = (&String, &Node)> {
-        self.children.iter()
+        self.children.iter().map(|child| {
+            let key = child.tool_calls.keys().next();
+            (key.expect("Child without tool calls"), child)
+        })
     }
 
     pub fn walk_subtcg<T, F>(&self, initial: T, f: &mut F) -> T
@@ -103,5 +111,39 @@ impl Node {
             + size_of_val(&self.inserted_at_seconds) as u32
             + size_of_val(&self.number_of_cache_hits) as u32
             + size_of_val(&self.number_of_lpm_hits) as u32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn children_resolve_through_any_tool_call_key() {
+        let mut root = Node::default();
+        let (child, is_new) = root.get_or_create_child("a".into());
+        assert!(is_new);
+        child
+            .tool_calls
+            .insert("alias".into(), ToolCallEntry::default());
+        let (child, is_new) = root.get_or_create_child("b".into());
+        assert!(is_new && child.tool_calls.len() == 1 && child.tool_calls.contains_key("b"));
+
+        let (child, is_new) = root.get_or_create_child("alias".into());
+        assert!(!is_new && child.tool_calls.contains_key("a"));
+        assert!(root.child("a").is_some() && root.child("missing").is_none());
+        assert_eq!(root.iter_children().count(), 2);
+        for (key, child) in root.iter_children() {
+            assert!(child.tool_calls.contains_key(key));
+        }
+
+        assert!(root
+            .remove_child("alias")
+            .unwrap()
+            .tool_calls
+            .contains_key("a"));
+        assert!(root.child("a").is_none() && root.child_mut("b").is_some());
+        root.retain_children(|child| !child.tool_calls.contains_key("b"));
+        assert!(root.children.is_empty());
     }
 }
