@@ -3,9 +3,8 @@
 import asyncio
 import json
 import time
-from typing import Any
 
-from cache_client import AsyncPersistentCacheClient
+from cache_client import AsyncPersistentCacheClient, dump_node
 
 
 HOST = "127.0.0.1"
@@ -31,23 +30,6 @@ async def dump_all(client: AsyncPersistentCacheClient) -> object:
     if response["type"] != "json":
         raise RuntimeError(f"expected json response, got {response['type']}")
     return json.loads(response["json"])
-
-
-def get_node(cache_dump: object, task_id: str, path: list[str]) -> dict[str, Any] | None:
-    if not isinstance(cache_dump, dict) or task_id not in cache_dump:
-        return None
-
-    curr = cache_dump[task_id].get("root")
-    if not isinstance(curr, dict):
-        return None
-
-    for path_entry in path:
-        children = curr.get("children", {})
-        if path_entry not in children:
-            return None
-        curr = children[path_entry]
-
-    return curr
 
 
 async def insert_node(
@@ -82,7 +64,7 @@ async def wait_for_node_removal(
     while time.monotonic() < deadline:
         await asyncio.sleep(1)
         latest_dump = await dump_all(client)
-        if get_node(latest_dump, task_id, path) is None:
+        if dump_node(latest_dump, task_id, path) is None:
             return latest_dump
 
     return latest_dump
@@ -135,28 +117,28 @@ async def run_test() -> None:
         )
 
         before_dump = await dump_all(client)
-        if get_node(before_dump, task_id, expiring_path) is None:
+        if dump_node(before_dump, task_id, expiring_path) is None:
             raise AssertionError("expiring node was missing before its TTL elapsed")
         for path in EXPIRING_SUBTREE_PATHS:
-            if get_node(before_dump, task_id, path) is None:
+            if dump_node(before_dump, task_id, path) is None:
                 raise AssertionError(
                     f"expiring subtree node was missing before TTL eviction: {path}"
                 )
-        if get_node(before_dump, task_id, persistent_path) is None:
+        if dump_node(before_dump, task_id, persistent_path) is None:
             raise AssertionError("persistent node was missing before TTL eviction")
 
         after_dump = await wait_for_node_removal(client, task_id, expiring_path)
 
-        if get_node(after_dump, task_id, expiring_path) is not None:
+        if dump_node(after_dump, task_id, expiring_path) is not None:
             raise AssertionError("expected TTL eviction to remove the expired node")
 
         for path in EXPIRING_SUBTREE_PATHS:
-            if get_node(after_dump, task_id, path) is not None:
+            if dump_node(after_dump, task_id, path) is not None:
                 raise AssertionError(
                     f"expected TTL eviction to remove expiring subtree node: {path}"
                 )
 
-        if get_node(after_dump, task_id, persistent_path) is None:
+        if dump_node(after_dump, task_id, persistent_path) is None:
             raise AssertionError("TTL eviction removed the non-expiring sibling node")
 
         expiring_find = await client.find(task_id, expiring_path)
