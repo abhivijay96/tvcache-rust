@@ -8,7 +8,7 @@ import json
 import time
 from typing import Any
 
-from cache_client import AsyncPersistentCacheClient, encode_insert
+from cache_client import AsyncPersistentCacheClient, dump_node, encode_insert
 
 HOST = "127.0.0.1"
 PORT = 7878
@@ -20,12 +20,7 @@ async def get_node(
     response = await client.dump_all_response()
     if response["type"] != "json":
         raise RuntimeError(f"expected json response, got {response}")
-    node = json.loads(response["json"])[task_id]["root"]
-    for path_entry in path:
-        node = node["children"].get(path_entry)
-        if node is None:
-            return None
-    return node
+    return dump_node(json.loads(response["json"]), task_id, path)
 
 
 def check(condition: bool, message: str) -> None:

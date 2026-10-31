@@ -292,6 +292,24 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
     raise ValueError(f"unknown response type: {response_type}")
 
 
+def dump_child(node: dict[str, Any], key: str) -> dict[str, Any] | None:
+    """Returns the dumped child whose tool calls include key."""
+    return next((child for child in node["children"] if key in child["tool_calls"]), None)
+
+
+def dump_node(dump: dict[str, Any], task_id: str, path: list[str]) -> dict[str, Any] | None:
+    """Returns the dumped node at path with its last tool call's fields merged in."""
+    graph = dump.get(task_id)
+    if graph is None:
+        return None
+    node = graph["root"]
+    for key in path:
+        node = dump_child(node, key)
+        if node is None:
+            return None
+    return {**node, **node["tool_calls"][path[-1]]} if path else node
+
+
 @dataclass(frozen=True)
 class CacheClient:
     host: str = "127.0.0.1"

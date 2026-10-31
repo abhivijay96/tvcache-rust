@@ -82,25 +82,37 @@ async def run_rollout(task_id: str, commands: list[str]) -> None:
             await executor.lookup_or_execute(history)
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    return dot / (math.hypot(*a) * math.hypot(*b))
+def cosine_similarity(a: list[float], b: list[float]) -> float | None:
+    """Returns None for mismatched dimensions or zero vectors, which the server skips."""
+    norms = math.hypot(*a) * math.hypot(*b)
+    if len(a) != len(b) or norms == 0:
+        return None
+    return sum(x * y for x, y in zip(a, b)) / norms
 
 
 def print_sibling_similarities(node: dict[str, Any], path: list[str]) -> None:
     """Prints the similarity of every pair of embedded siblings, as stored on the server."""
-    embedded = {
-        json.loads(key)["command"]: child["embedding"]
-        for key, child in node["children"].items()
-        if child["embedding"] is not None
+    children = {
+        " / ".join(sorted(json.loads(key)["command"] for key in child["tool_calls"])): child
+        for child in node["children"]
     }
+    embedded = {}
+    for label, child in children.items():
+        embeddings = [entry["embedding"] for entry in child["tool_calls"].values()]
+        embeddings = [embedding for embedding in embeddings if embedding is not None]
+        if embeddings:
+            embedded[label] = embeddings
     if len(embedded) > 1:
         print(f"\nSiblings under {' > '.join(path) or 'the root'}:")
-        for (a, a_embedding), (b, b_embedding) in combinations(sorted(embedded.items()), 2):
-            print(f"  {cosine_similarity(a_embedding, b_embedding):6.3f}  {a!r} vs {b!r}")
+        for (a, a_embeddings), (b, b_embeddings) in combinations(sorted(embedded.items()), 2):
+            # Merged siblings score by their most similar pair of tool calls.
+            scores = [cosine_similarity(x, y) for x in a_embeddings for y in b_embeddings]
+            scores = [score for score in scores if score is not None]
+            if scores:
+                print(f"  {max(scores):6.3f}  {a!r} vs {b!r}")
 
-    for key, child in node["children"].items():
-        print_sibling_similarities(child, path + [json.loads(key)["command"]])
+    for label, child in children.items():
+        print_sibling_similarities(child, path + [label])
 
 
 async def main() -> None:
