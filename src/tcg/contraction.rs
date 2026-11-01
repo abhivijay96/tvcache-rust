@@ -1,4 +1,4 @@
-use crate::tcg::Node;
+use crate::tcg::{Node, ToolCallGraph};
 
 /// A child with at least one similar sibling it may still need comparing with.
 #[derive(Debug)]
@@ -15,6 +15,45 @@ pub struct SiblingGroup {
     pub parent_path: Vec<String>,
     pub children: Vec<Sibling>,
     pub pairs: Vec<(usize, usize, f32)>,
+}
+
+impl ToolCallGraph {
+    /// Returns whether any node is deeper than depth, and the similar siblings at depth.
+    pub fn sibling_groups(&self, depth: usize, threshold: f32) -> (bool, Vec<SiblingGroup>) {
+        let Some(parent_depth) = depth.checked_sub(1) else {
+            return (!self.root.children.is_empty(), Vec::new());
+        };
+        let mut parents = Vec::new();
+        collect_parents(&self.root, parent_depth, &mut Vec::new(), &mut parents);
+
+        let deeper_nodes_exist = parents.iter().any(|(_, parent)| {
+            parent
+                .iter_children()
+                .any(|(_, child)| !child.children.is_empty())
+        });
+        let groups = parents
+            .into_iter()
+            .filter_map(|(path, parent)| sibling_group(path, parent, threshold))
+            .collect();
+        (deeper_nodes_exist, groups)
+    }
+}
+
+fn collect_parents<'a>(
+    node: &'a Node,
+    remaining_depth: usize,
+    path: &mut Vec<String>,
+    parents: &mut Vec<(Vec<String>, &'a Node)>,
+) {
+    if remaining_depth == 0 {
+        parents.push((path.clone(), node));
+        return;
+    }
+    for (key, child) in node.iter_children() {
+        path.push(key.clone());
+        collect_parents(child, remaining_depth - 1, path, parents);
+        path.pop();
+    }
 }
 
 /// Returns None if no pair of the parent's children qualifies.
@@ -103,7 +142,6 @@ fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
 mod tests {
     use super::*;
     use crate::tcg::node::ToolCallEntry;
-    use crate::tcg::ToolCallGraph;
 
     fn node(entries: &[Option<Vec<f32>>]) -> Node {
         let mut node = Node::default();
@@ -148,8 +186,9 @@ mod tests {
         assert_eq!(score(&a, &node(&[Some(vec![f32::INFINITY, 0.0])])), None);
     }
 
-    fn insert(graph: &mut ToolCallGraph, key: &str, embedding: Option<Vec<f32>>) {
-        graph.insert(vec![key.into()], None, None, 1, None, false, embedding);
+    fn insert(graph: &mut ToolCallGraph, path: &[&str], embedding: Option<Vec<f32>>) {
+        let path = path.iter().map(|key| key.to_string()).collect();
+        graph.insert(path, None, None, 1, None, false, embedding);
     }
 
     fn summary(group: &SiblingGroup) -> (Vec<String>, Vec<(usize, usize, i32)>) {
@@ -166,11 +205,11 @@ mod tests {
     fn sibling_group_follows_qualifying_rules() {
         let mut graph = ToolCallGraph::new();
         assert!(sibling_group(Vec::new(), &graph.root, 0.0).is_none());
-        insert(&mut graph, "a", Some(vec![1.0, 0.0]));
+        insert(&mut graph, &["a"], Some(vec![1.0, 0.0]));
         assert!(sibling_group(Vec::new(), &graph.root, 0.0).is_none());
-        insert(&mut graph, "b", Some(vec![0.8, 0.6]));
-        insert(&mut graph, "c", Some(vec![0.0, 1.0]));
-        insert(&mut graph, "missing", None);
+        insert(&mut graph, &["b"], Some(vec![0.8, 0.6]));
+        insert(&mut graph, &["c"], Some(vec![0.0, 1.0]));
+        insert(&mut graph, &["missing"], None);
         graph.root.child_mut("b").unwrap().sandbox_id = Some("snapshot".into());
 
         // The b-c pair scores exactly at the threshold, which qualifies.
@@ -202,5 +241,35 @@ mod tests {
         let group = sibling_group(Vec::new(), &graph.root, 0.6).unwrap();
         let expected = vec!["a".to_string(), "b".into(), "alias+c+empty".into()];
         assert_eq!(summary(&group), (expected, vec![(0, 2, 100), (1, 2, 80)]));
+    }
+
+    #[test]
+    fn sibling_groups_report_parents_and_deeper_nodes() {
+        let mut graph = ToolCallGraph::new();
+        assert!(!graph.sibling_groups(0, 0.5).0);
+        insert(&mut graph, &["a"], None);
+        insert(&mut graph, &["b"], None);
+        insert(&mut graph, &["a", "x"], Some(vec![1.0, 0.0]));
+        insert(&mut graph, &["a", "y"], Some(vec![0.0, 1.0]));
+        insert(&mut graph, &["b", "z"], Some(vec![1.0, 0.0]));
+        insert(&mut graph, &["b", "v"], Some(vec![1.0, 0.1]));
+        insert(&mut graph, &["a", "x", "p"], Some(vec![1.0, 0.0]));
+        insert(&mut graph, &["a", "x", "q"], Some(vec![1.0, 0.0]));
+
+        // A depth without pairs can still have deeper nodes.
+        let (deeper, groups) = graph.sibling_groups(0, 0.5);
+        assert!(deeper && groups.is_empty());
+        let (deeper, groups) = graph.sibling_groups(1, 0.5);
+        assert!(deeper && groups.is_empty());
+
+        // Parents without pairs are omitted, and cousins x and z are never paired.
+        let (deeper, groups) = graph.sibling_groups(2, 0.5);
+        assert!(deeper && groups.len() == 1 && groups[0].parent_path == ["b"]);
+        assert_eq!(summary(&groups[0]).0, ["z", "v"]);
+
+        let (deeper, groups) = graph.sibling_groups(3, 0.5);
+        assert!(!deeper && groups.len() == 1 && groups[0].parent_path == ["a", "x"]);
+        let (deeper, groups) = graph.sibling_groups(9, 0.5);
+        assert!(!deeper && groups.is_empty());
     }
 }
