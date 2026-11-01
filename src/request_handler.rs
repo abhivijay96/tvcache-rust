@@ -5,6 +5,7 @@ use tracing::error;
 
 use crate::{
     protocol_primitives,
+    tcg::contraction::SiblingGroup,
     tvcache::tcg_entries_to_json,
     types::{
         CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
@@ -170,6 +171,18 @@ impl RequestHandler {
                 let path = protocol_primitives::read_path(stream).await?;
 
                 Ok(Request::LeaseSandbox { task_id, path })
+            }
+
+            12 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let depth = protocol_primitives::read_u16(stream).await?;
+                let threshold = protocol_primitives::read_f32(stream).await?;
+
+                Ok(Request::ListSiblingGroups {
+                    task_id,
+                    depth,
+                    threshold,
+                })
             }
 
             _ => Err(io::Error::new(
@@ -397,6 +410,36 @@ impl RequestHandler {
                     sandbox_id,
                 }
             }
+
+            Request::ListSiblingGroups {
+                task_id,
+                depth,
+                threshold,
+            } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let (deeper_nodes_exist, groups) = match tcg {
+                    Some(tcg) => {
+                        let tcg = tcg.lock().await;
+                        tcg.sibling_groups(usize::from(depth), threshold)
+                    }
+                    None => (false, Vec::new()),
+                };
+
+                if sibling_groups_fit(&groups) {
+                    Response::SiblingGroups {
+                        deeper_nodes_exist,
+                        groups,
+                    }
+                } else {
+                    Response::Error {
+                        message: "sibling groups exceed protocol limits".to_string(),
+                    }
+                }
+            }
         }
     }
 
@@ -485,6 +528,15 @@ impl RequestHandler {
                     .await?;
             }
 
+            Response::SiblingGroups {
+                deeper_nodes_exist,
+                groups,
+            } => {
+                protocol_primitives::write_u8(stream, 11).await?;
+                protocol_primitives::write_bool(stream, deeper_nodes_exist).await?;
+                self.write_sibling_groups(stream, &groups).await?;
+            }
+
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
@@ -549,6 +601,36 @@ impl RequestHandler {
         Ok(())
     }
 
+    // Counts and indexes were checked by sibling_groups_fit.
+    async fn write_sibling_groups(
+        &self,
+        stream: &mut TcpStream,
+        groups: &[SiblingGroup],
+    ) -> Result<(), io::Error> {
+        protocol_primitives::write_u16(stream, groups.len() as u16).await?;
+
+        for group in groups {
+            protocol_primitives::write_path(stream, &group.parent_path).await?;
+            protocol_primitives::write_u16(stream, group.children.len() as u16).await?;
+
+            for sibling in &group.children {
+                protocol_primitives::write_path(stream, &sibling.keys).await?;
+                protocol_primitives::write_bool(stream, sibling.settled).await?;
+                protocol_primitives::write_bool(stream, sibling.has_snapshot).await?;
+            }
+
+            protocol_primitives::write_u32(stream, group.pairs.len() as u32).await?;
+
+            for &(i, j, score) in &group.pairs {
+                protocol_primitives::write_u16(stream, i as u16).await?;
+                protocol_primitives::write_u16(stream, j as u16).await?;
+                protocol_primitives::write_f32(stream, score).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     async fn read_sandbox_eviction_records(
         &self,
         stream: &mut TcpStream,
@@ -593,5 +675,44 @@ impl RequestHandler {
         }
 
         Ok(())
+    }
+}
+
+/// Returns whether every count and index fits its protocol field.
+fn sibling_groups_fit(groups: &[SiblingGroup]) -> bool {
+    let fits_u16 = |count: usize| u16::try_from(count).is_ok();
+    fits_u16(groups.len())
+        && groups.iter().all(|group| {
+            fits_u16(group.parent_path.len())
+                && fits_u16(group.children.len())
+                && group
+                    .children
+                    .iter()
+                    .all(|sibling| fits_u16(sibling.keys.len()))
+                && u32::try_from(group.pairs.len()).is_ok()
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tcg::contraction::Sibling;
+
+    #[test]
+    fn sibling_groups_fit_checks_protocol_limits() {
+        let group = |siblings: usize| SiblingGroup {
+            parent_path: Vec::new(),
+            children: (0..siblings)
+                .map(|_| Sibling {
+                    keys: vec!["a".into()],
+                    settled: false,
+                    has_snapshot: false,
+                })
+                .collect(),
+            pairs: vec![(0, 1, 1.0)],
+        };
+        let limit = usize::from(u16::MAX);
+        assert!(sibling_groups_fit(&[group(limit)]));
+        assert!(!sibling_groups_fit(&[group(limit + 1)]));
     }
 }

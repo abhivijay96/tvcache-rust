@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{tcg::ToolCallGraph, tvcache::TVCache};
+use crate::{
+    tcg::{contraction::SiblingGroup, ToolCallGraph},
+    tvcache::TVCache,
+};
 
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
@@ -60,6 +63,11 @@ pub enum Request {
         task_id: String,
         path: Vec<String>,
     },
+    ListSiblingGroups {
+        task_id: String,
+        depth: u16,
+        threshold: f32,
+    },
 }
 
 pub enum Response {
@@ -90,6 +98,10 @@ pub enum Response {
     LeaseResult {
         sandbox_path: Option<Vec<String>>,
         sandbox_id: Option<String>,
+    },
+    SiblingGroups {
+        deeper_nodes_exist: bool,
+        groups: Vec<SiblingGroup>,
     },
     Error {
         message: String,
