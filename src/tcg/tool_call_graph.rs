@@ -107,36 +107,15 @@ impl ToolCallGraph {
     ) -> (Option<String>, (Option<Vec<String>>, Option<String>)) {
         // this function tries to find the exact path in the tcg and return the value of the last node or return the longest prefix match with a sandbox id
 
-        let mut curr = &mut self.root;
-        let mut curr_path: Vec<String> = Vec::new();
-        let mut sandbox_path: Option<Vec<String>> = None;
-        let mut sandbox_id: Option<String> = None;
-        let mut value_of_path: Option<String> = None;
         let path_len = path.len();
+        let mut value_of_path: Option<String> = None;
 
-        // if let Some(id) = &curr.sandbox_id {
-        //     sandbox_id = Some(id.clone());
-        // } // No need to store root's sandbox id
-
-        for p in path {
-            if let Some(next) = curr.child_mut(&p) {
-                curr_path.push(p);
-                curr = next;
-
-                if let Some(id) = &curr.sandbox_id {
-                    sandbox_id = Some(id.clone());
-                    sandbox_path = Some(curr_path.clone());
-                }
-
-                if curr_path.len() == path_len {
-                    curr.number_of_cache_hits += 1;
-                    value_of_path = curr.tool_calls[&curr_path[path_len - 1]].value.clone();
-                }
-            } else {
-                // The path has diverged from the tcg, so return what you have seen so far, if value is found, return it
-                break;
+        let (sandbox_path, sandbox_id) = self.walk_path(&path, |node, depth| {
+            if depth == path_len {
+                node.number_of_cache_hits += 1;
+                value_of_path = node.tool_calls[&path[depth - 1]].value.clone();
             }
-        }
+        });
 
         if value_of_path.is_none() && sandbox_id.is_some() {
             let mut sandbox_node = &mut self.root;
@@ -153,6 +132,50 @@ impl ToolCallGraph {
         }
 
         return (value_of_path, (sandbox_path, sandbox_id));
+    }
+
+    /// Returns the deepest snapshot on path and references it, without counting hits.
+    pub fn lease_sandbox(&mut self, path: &[String]) -> (Option<Vec<String>>, Option<String>) {
+        let lease = self.walk_path(path, |_, _| {});
+        if let Some(sandbox_id) = &lease.1 {
+            self.increment_sandbox_reference(sandbox_id);
+        }
+        lease
+    }
+
+    /// Follows path while the graph matches it, visiting each matched node with its depth.
+    /// Returns the deepest snapshot on the matched prefix.
+    fn walk_path<F>(
+        &mut self,
+        path: &[String],
+        mut visit: F,
+    ) -> (Option<Vec<String>>, Option<String>)
+    where
+        F: FnMut(&mut Node, usize),
+    {
+        let mut curr = &mut self.root;
+        let mut sandbox_path = None;
+        let mut sandbox_id = None;
+
+        // if let Some(id) = &curr.sandbox_id {
+        //     sandbox_id = Some(id.clone());
+        // } // No need to store root's sandbox id
+
+        for (index, p) in path.iter().enumerate() {
+            // The path has diverged from the tcg, so return what has been seen so far.
+            let Some(next) = curr.child_mut(p) else {
+                break;
+            };
+            curr = next;
+            visit(curr, index + 1);
+
+            if let Some(id) = &curr.sandbox_id {
+                sandbox_id = Some(id.clone());
+                sandbox_path = Some(path[..=index].to_vec());
+            }
+        }
+
+        (sandbox_path, sandbox_id)
     }
 
     pub fn collect_sandbox_candidates(&self, task_id: &str) -> Vec<SandboxCandidate> {
@@ -337,5 +360,68 @@ mod tests {
             .insert("alias".into(), node.tool_calls["a"].clone());
         node.update_size_in_bytes();
         assert_eq!(node.size_in_bytes, original_size + 5 + 5 + 4 + 8);
+    }
+
+    #[test]
+    fn lease_returns_deepest_snapshot_without_counting_hits() {
+        let path = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+        let mut graph = ToolCallGraph::new();
+        graph.insert(
+            path(&["a"]),
+            Some("a".into()),
+            Some("shallow".into()),
+            1,
+            None,
+            false,
+            None,
+        );
+        graph.insert(
+            path(&["a", "b"]),
+            Some("b".into()),
+            Some("deep".into()),
+            1,
+            None,
+            false,
+            None,
+        );
+        graph.insert(
+            path(&["a", "b", "c"]),
+            Some("c".into()),
+            None,
+            1,
+            None,
+            false,
+            None,
+        );
+
+        let deep = (Some(path(&["a", "b"])), Some("deep".to_string()));
+        assert_eq!(graph.lease_sandbox(&path(&["a", "b", "c"])), deep);
+        assert_eq!(graph.lease_sandbox(&path(&["a", "b", "missing"])), deep);
+        assert_eq!(graph.lease_sandbox(&path(&["missing"])), (None, None));
+        assert_eq!(graph.lease_sandbox(&[]), (None, None));
+        assert_eq!(graph.sandbox_references["deep"], 2);
+        assert!(!graph.sandbox_references.contains_key("shallow"));
+        let hits = |graph: &ToolCallGraph| {
+            graph.root.walk_subtcg(0, &mut |acc, node| {
+                acc + node.number_of_cache_hits + node.number_of_lpm_hits
+            })
+        };
+        assert_eq!(hits(&graph), 0);
+
+        assert_eq!(
+            graph.find(path(&["a", "b", "c"])),
+            (Some("c".into()), deep.clone())
+        );
+        assert_eq!(
+            graph.find(path(&["a", "b"])),
+            (Some("b".into()), deep.clone())
+        );
+        assert_eq!(graph.find(path(&["a", "b", "missing"])), (None, deep));
+        assert_eq!(graph.find(Vec::new()), (None, (None, None)));
+        let b = graph.root.child("a").unwrap().child("b").unwrap();
+        assert_eq!((b.number_of_cache_hits, b.number_of_lpm_hits), (1, 1));
+        assert_eq!(b.child("c").unwrap().number_of_cache_hits, 1);
+        assert_eq!(hits(&graph), 3);
+        assert_eq!(graph.sandbox_references["deep"], 2);
     }
 }
