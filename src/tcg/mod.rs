@@ -1,3 +1,4 @@
+pub mod contraction;
 pub mod node;
 pub mod tool_call_graph;
 
