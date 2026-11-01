@@ -228,6 +228,13 @@
       white-space: pre;
     }
 
+    .tool-call {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid #cfd8d8;
+      padding-top: 8px;
+    }
+
     .node-card.selected {
       border: 4px solid #111;
     }
@@ -346,7 +353,7 @@
       <section class="tool">
         <h3>Node</h3>
         <div class="similarity-legend">
-          <span>A thick black outline marks the selected node. Siblings are outlined by embedding similarity, red (0) to green (1).</span>
+          <span>A thick black outline marks the selected node. Siblings are outlined by their most similar pair of tool-call embeddings, red (0) to green (1).</span>
         </div>
         <div id="nodeDetails" class="find-result">
           <div class="result-row"><strong>Status</strong><span>Click a node to see its attributes.</span></div>
@@ -396,19 +403,25 @@
       return String(value);
     }
 
-    function toTreeNode(key, node, path) {
-      const childrenMap = node.children || {};
-      const children = Object.entries(childrenMap)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([childKey, childNode]) => toTreeNode(childKey, childNode, path.concat(childKey)));
+    function toTreeNode(node, parentPath) {
+      const toolCalls = node.tool_calls || {};
+      const keys = Object.keys(toolCalls).sort((a, b) => a.localeCompare(b));
+      // Any of a node's keys reaches it, so the first one names it.
+      const entry = keys.length ? toolCalls[keys[0]] : {};
+      const path = keys.length ? parentPath.concat(keys[0]) : parentPath;
+      const children = (node.children || [])
+        .map(child => toTreeNode(child, path))
+        .sort((a, b) => a.key.localeCompare(b.key));
 
       return {
-        key,
+        key: keys[0] ?? "root",
+        keys,
         path,
-        value: node.value ?? null,
+        value: entry.value ?? null,
         sandbox_id: node.sandbox_id ?? null,
-        runtime: node.runtime ?? 0,
+        runtime: entry.runtime ?? 0,
         child_count: children.length,
+        embeddings: keys.map(key => toolCalls[key].embedding).filter(Array.isArray),
         attributes: node,
         children
       };
@@ -460,23 +473,33 @@
     function renderNodeDetails(data) {
       const row = (name, value) =>
         `<div class="result-row"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(value)}</span></div>`;
-      const { children, embedding, ...fields } = data.attributes;
+      const embeddingRow = embedding => {
+        if (!Array.isArray(embedding)) {
+          return row("embedding", display(embedding));
+        }
+        const values = embedding.map((value, index) => `${String(index).padStart(3)}: ${value}`).join("\n");
+        return `
+          <div class="result-row">
+            <strong>embedding (${embedding.length} values)</strong>
+            <div class="embedding-values">${escapeHtml(values)}</div>
+          </div>
+        `;
+      };
+      const { children, tool_calls: toolCalls, ...fields } = data.attributes;
       const rows = [row("path", JSON.stringify(data.path))];
       for (const [name, value] of Object.entries(fields)) {
         rows.push(row(name, display(value)));
       }
 
-      if (Array.isArray(embedding)) {
-        const values = embedding.map((value, index) => `${String(index).padStart(3)}: ${value}`).join("\n");
-        rows.push(`
-          <div class="result-row">
-            <strong>embedding (${embedding.length} values)</strong>
-            <div class="embedding-values">${escapeHtml(values)}</div>
-          </div>
-        `);
-      } else {
-        rows.push(row("embedding", display(embedding)));
-      }
+      data.keys.forEach((key, index) => {
+        const { embedding, ...entryFields } = toolCalls[key];
+        const entryRows = [row(`tool call ${index + 1} of ${data.keys.length}`, key)];
+        for (const [name, value] of Object.entries(entryFields)) {
+          entryRows.push(row(name, display(value)));
+        }
+        entryRows.push(embeddingRow(embedding));
+        rows.push(`<div class="tool-call">${entryRows.join("")}</div>`);
+      });
       nodeDetails.innerHTML = rows.join("");
       nodeDetails.scrollIntoView({ block: "nearest" });
     }
@@ -491,17 +514,25 @@
       return dot / Math.sqrt(normA * normB);
     }
 
-    function highlightNode(selected) {
-      const embedding = selected.data.attributes.embedding;
+    // Matches the server, which skips mismatched dimensions and zero vectors.
+    function siblingSimilarity(a, b) {
+      let best = null;
+      for (const x of a) {
+        for (const y of b) {
+          const score = x.length === y.length ? cosineSimilarity(x, y) : NaN;
+          if (Number.isFinite(score) && (best === null || score > best)) {
+            best = score;
+          }
+        }
+      }
+      return best;
+    }
 
+    function highlightNode(selected) {
       d3.select(chart).selectAll(".node-card").each(function (d) {
         const card = d3.select(this);
-        const other = d.data.attributes.embedding;
-        const comparable = d !== selected && d.parent === selected.parent
-          && Array.isArray(embedding) && Array.isArray(other) && other.length === embedding.length;
-        const score = comparable ? cosineSimilarity(embedding, other) : NaN;
-        // Zero or empty embeddings give NaN, which has no color.
-        const similarity = Number.isFinite(score) ? score : null;
+        const sibling = d !== selected && d.parent === selected.parent;
+        const similarity = sibling ? siblingSimilarity(selected.data.embeddings, d.data.embeddings) : null;
 
         card.classed("selected", d === selected)
           .classed("similar", similarity !== null)
@@ -540,7 +571,7 @@
         return;
       }
 
-      const root = d3.hierarchy(toTreeNode("root", graph.root || {}, []));
+      const root = d3.hierarchy(toTreeNode(graph.root || {}, []));
       const nodeWidth = 320;
       const nodeHeight = 220;
       const horizontalGap = 56;
@@ -610,7 +641,7 @@
         .html(d => {
           const data = d.data;
           return `
-          <div class="node-header">${escapeHtml(data.key)}</div>
+          <div class="node-header">${escapeHtml(data.key)}${data.keys.length > 1 ? escapeHtml(` (+${data.keys.length - 1} more)`) : ""}</div>
           <div class="node-body">
             <div class="field"><span>value</span><span>${escapeHtml(display(data.value))}</span></div>
             <div class="field"><span>sandbox</span><span>${escapeHtml(display(data.sandbox_id))}</span></div>
