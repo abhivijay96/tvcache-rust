@@ -56,6 +56,10 @@ pub enum Request {
     GetForkCost {
         task_id: String,
     },
+    LeaseSandbox {
+        task_id: String,
+        path: Vec<String>,
+    },
 }
 
 pub enum Response {
@@ -82,6 +86,10 @@ pub enum Response {
     },
     ForkCost {
         fork_cost_ms: u32,
+    },
+    LeaseResult {
+        sandbox_path: Option<Vec<String>>,
+        sandbox_id: Option<String>,
     },
     Error {
         message: String,

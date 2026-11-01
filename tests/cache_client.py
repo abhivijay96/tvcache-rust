@@ -17,6 +17,7 @@ MARK_SANDBOXES_EVICTED_REQUEST = 5
 LIST_SANDBOX_CANDIDATES_REQUEST = 6
 DRAIN_RECLAIMABLE_SANDBOXES_REQUEST = 7
 LIST_HOT_SANDBOXES_REQUEST = 8
+LEASE_SANDBOX_REQUEST = 11
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
@@ -26,6 +27,7 @@ UNREF_SANDBOX_RESULT_RESPONSE = 5
 MARK_SANDBOXES_EVICTED_RESULT_RESPONSE = 6
 SANDBOX_CANDIDATES_RESPONSE = 7
 RECLAIMABLE_SANDBOXES_RESPONSE = 8
+LEASE_RESULT_RESPONSE = 10
 
 
 def write_u8(value: int) -> bytes:
@@ -146,6 +148,10 @@ def encode_drain_reclaimable_sandboxes() -> bytes:
 
 def encode_list_hot_sandboxes(limit: int = 10) -> bytes:
     return write_u8(LIST_HOT_SANDBOXES_REQUEST) + write_u16(limit)
+
+
+def encode_lease_sandbox(task_id: str, path: list[str]) -> bytes:
+    return write_u8(LEASE_SANDBOX_REQUEST) + write_string_u16(task_id) + write_path(path)
 
 
 def read_exact(sock: socket.socket, size: int) -> bytes:
@@ -276,6 +282,13 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "candidates": read_sandbox_candidates(sock),
         }
 
+    if response_type == LEASE_RESULT_RESPONSE:
+        return {
+            "type": "lease_result",
+            "sandbox_path": read_optional_path(sock),
+            "sandbox_id": read_optional_string_u16(sock),
+        }
+
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
         count = read_u32(sock)
         return {
@@ -374,6 +387,9 @@ class CacheClient:
     def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_hot_sandboxes(limit))
 
+    def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return self.send_request(encode_lease_sandbox(task_id, path))
+
     def dump_all(self) -> object:
         response = self.dump_all_response()
         if response["type"] == "error":
@@ -464,6 +480,9 @@ class PersistentCacheClient:
 
     def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_hot_sandboxes(limit))
+
+    def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return self.send_request(encode_lease_sandbox(task_id, path))
 
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
@@ -592,6 +611,13 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
             "candidates": await async_read_sandbox_candidates(reader),
         }
 
+    if response_type == LEASE_RESULT_RESPONSE:
+        return {
+            "type": "lease_result",
+            "sandbox_path": await async_read_optional_path(reader),
+            "sandbox_id": await async_read_optional_string_u16(reader),
+        }
+
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
         count = await async_read_u32(reader)
         return {
@@ -696,3 +722,6 @@ class AsyncPersistentCacheClient:
 
     async def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return await self.send_request(encode_list_hot_sandboxes(limit))
+
+    async def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return await self.send_request(encode_lease_sandbox(task_id, path))

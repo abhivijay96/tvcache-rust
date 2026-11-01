@@ -165,6 +165,13 @@ impl RequestHandler {
                 Ok(Request::GetForkCost { task_id })
             }
 
+            11 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let path = protocol_primitives::read_path(stream).await?;
+
+                Ok(Request::LeaseSandbox { task_id, path })
+            }
+
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown request type: {request_type}"),
@@ -370,6 +377,26 @@ impl RequestHandler {
 
                 Response::ForkCost { fork_cost_ms }
             }
+
+            Request::LeaseSandbox { task_id, path } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let (sandbox_path, sandbox_id) = match tcg {
+                    Some(tcg) => {
+                        let mut tcg = tcg.lock().await;
+                        tcg.lease_sandbox(&path)
+                    }
+                    None => (None, None),
+                };
+
+                Response::LeaseResult {
+                    sandbox_path,
+                    sandbox_id,
+                }
+            }
         }
     }
 
@@ -402,19 +429,8 @@ impl RequestHandler {
                     protocol_primitives::write_bool(stream, false).await?;
                 }
 
-                if let Some(sandbox_path) = sandbox_path {
-                    protocol_primitives::write_bool(stream, true).await?;
-                    protocol_primitives::write_path(stream, &sandbox_path).await?;
-                } else {
-                    protocol_primitives::write_bool(stream, false).await?;
-                }
-
-                if let Some(sandbox_id) = sandbox_id {
-                    protocol_primitives::write_bool(stream, true).await?;
-                    protocol_primitives::write_string_u16(stream, &sandbox_id).await?;
-                } else {
-                    protocol_primitives::write_bool(stream, false).await?;
-                }
+                self.write_sandbox_location(stream, sandbox_path, sandbox_id)
+                    .await?;
             }
 
             Response::UnrefSandboxResult {
@@ -460,6 +476,15 @@ impl RequestHandler {
                 protocol_primitives::write_u32(stream, fork_cost_ms).await?;
             }
 
+            Response::LeaseResult {
+                sandbox_path,
+                sandbox_id,
+            } => {
+                protocol_primitives::write_u8(stream, 10).await?;
+                self.write_sandbox_location(stream, sandbox_path, sandbox_id)
+                    .await?;
+            }
+
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
@@ -499,6 +524,29 @@ impl RequestHandler {
         candidates.truncate(limit);
 
         candidates
+    }
+
+    async fn write_sandbox_location(
+        &self,
+        stream: &mut TcpStream,
+        sandbox_path: Option<Vec<String>>,
+        sandbox_id: Option<String>,
+    ) -> Result<(), io::Error> {
+        if let Some(sandbox_path) = sandbox_path {
+            protocol_primitives::write_bool(stream, true).await?;
+            protocol_primitives::write_path(stream, &sandbox_path).await?;
+        } else {
+            protocol_primitives::write_bool(stream, false).await?;
+        }
+
+        if let Some(sandbox_id) = sandbox_id {
+            protocol_primitives::write_bool(stream, true).await?;
+            protocol_primitives::write_string_u16(stream, &sandbox_id).await?;
+        } else {
+            protocol_primitives::write_bool(stream, false).await?;
+        }
+
+        Ok(())
     }
 
     async fn read_sandbox_eviction_records(
