@@ -22,7 +22,8 @@ use types::CacheSharedObject;
 async fn main() -> io::Result<()> {
     init_tracing();
 
-    let listener = TcpListener::bind("0.0.0.0:7878").await?;
+    let port = parse_port();
+    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     let eviction_policy_config = parse_eviction_policy_config();
 
     let cache_shared_object: CacheSharedObject = Arc::new(Mutex::new(TVCache::new()));
@@ -32,7 +33,7 @@ async fn main() -> io::Result<()> {
         cache_policy_enforcer::run_eviction_loop(eviction_cache, eviction_policy_config).await;
     });
 
-    info!("listening on 127.0.0.1:7878 with tokio");
+    info!("listening on 0.0.0.0:{port} with tokio");
 
     loop {
         match listener.accept().await {
@@ -56,6 +57,18 @@ fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
+}
+
+fn parse_port() -> u16 {
+    let mut port = 7878;
+
+    for arg in env::args().skip(1) {
+        if let Some(value) = arg.strip_prefix("--port=") {
+            port = value.parse().unwrap_or(port);
+        }
+    }
+
+    port
 }
 
 fn parse_eviction_policy_config() -> EvictionPolicyConfig {

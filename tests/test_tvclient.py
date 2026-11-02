@@ -1,91 +1,44 @@
 #!/usr/bin/env python3
 """Integration test for the tvclient library against a live TVCache server.
 
-Run the server first: cargo run
+Run the server first: cargo run  (or --port=N and TVCACHE_PORT=N)
 Then: python tests/test_tvclient.py
 """
 
 import asyncio
-import itertools
+import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tvclient"))
+sys.path.insert(0, str(REPO_ROOT / "correctness"))
 
-from tvclient import (
-    AsyncStatefulExecutor,
-    ForkBank,
-    SandboxManager,
-    ToolCall,
-    ToolCallEnv,
-    TVCacheClient,
+from tvclient import ForkBank, SandboxManager, TvcacheToolExecutor, TVCacheClient  # noqa: E402
+from tvverify.adapters.mock_list import (  # noqa: E402
+    CommandToolCall,
+    MockListSandbox as MockToolCallEnv,
 )
 
 HOST = "127.0.0.1"
-PORT = 7878
+PORT = int(os.environ.get("TVCACHE_PORT", "7878"))
 FORK_THRESHOLD_SECONDS = 0.05
-SLOW_CALL_SECONDS = 0.08
-FAST_CALL_SECONDS = 0.001
+# test_lease inserts fake sandbox ids directly into the cache, and the fork
+# bank's hot list is global, so unknown handles must restore as empty here.
+MockToolCallEnv.strict_ids = False
 
 
-class CommandToolCall(ToolCall):
-    def __init__(self, command: str, mutates: bool = True, slow: bool = False):
-        self.command = command
-        self.mutates = mutates
-        self.slow = slow
-
-    def to_dict(self) -> dict:
-        return {"command": self.command}
-
-    def will_mutate_state(self) -> bool:
-        return self.mutates
-
-
-class MockToolCallEnv(ToolCallEnv):
-    """In-memory sandbox: the state is the list of serialized calls applied."""
-
-    registry: Dict[str, List[str]] = {}
-    execute_log: List[Tuple[str, str]] = []
-    stop_log: List[str] = []
-    _counter = itertools.count()
-
-    async def start(self) -> None:
-        self.env_id = f"env-{next(MockToolCallEnv._counter)}"
-        MockToolCallEnv.registry[self.env_id] = []
-
-    async def fork(self) -> "MockToolCallEnv":
-        child = MockToolCallEnv(task_name=self.task_name)
-        child.env_id = f"env-{next(MockToolCallEnv._counter)}"
-        # .get tolerates foreign parent ids left in the cache by other test runs.
-        child_state = list(MockToolCallEnv.registry.get(self.env_id, []))
-        MockToolCallEnv.registry[child.env_id] = child_state
-        return child
-
-    async def execute(self, tool_call: ToolCall) -> str:
-        await asyncio.sleep(
-            SLOW_CALL_SECONDS if getattr(tool_call, "slow", False) else FAST_CALL_SECONDS
-        )
-        serialized = tool_call.serialize()
-        MockToolCallEnv.execute_log.append((self.env_id, serialized))
-        if tool_call.will_mutate_state():
-            MockToolCallEnv.registry[self.env_id].append(serialized)
-        return f"result:{serialized}"
-
-    async def stop(self) -> None:
-        MockToolCallEnv.stop_log.append(self.env_id)
-        MockToolCallEnv.registry.pop(self.env_id, None)
-
-
-def make_executor(task_id: str) -> AsyncStatefulExecutor:
-    return AsyncStatefulExecutor(
+def make_executor(task_id: str) -> TvcacheToolExecutor:
+    return TvcacheToolExecutor(
         MockToolCallEnv,
         CommandToolCall,
         task_id,
         host=HOST,
         port=PORT,
-        fork_threshold_seconds=FORK_THRESHOLD_SECONDS,
+        adaptive=False,
+        fixed_threshold_seconds=FORK_THRESHOLD_SECONDS,
     )
 
 
@@ -129,9 +82,9 @@ async def test_executor(client: TVCacheClient, prefix: str) -> tuple:
 
     # Rollout A: all misses; slow calls store sandbox snapshots.
     async with make_executor(task_id) as rollout_a:
-        value_1 = await rollout_a.execute([c1])
-        value_2 = await rollout_a.execute([c1, c2])
-        value_3 = await rollout_a.execute([c1, c2, c3])
+        value_1 = await rollout_a.lookup_or_execute([c1])
+        value_2 = await rollout_a.lookup_or_execute([c1, c2])
+        value_3 = await rollout_a.lookup_or_execute([c1, c2, c3])
         assert value_1 == f"result:{c1.serialize()}", value_1
         assert value_2 == f"result:{c2.serialize()}", value_2
         assert value_3 == f"result:{c3.serialize()}", value_3
@@ -144,22 +97,22 @@ async def test_executor(client: TVCacheClient, prefix: str) -> tuple:
     # Rollout B: the same sequence is now all exact hits; nothing executes and
     # no environment is ever created.
     async with make_executor(task_id) as rollout_b:
-        assert await rollout_b.execute([c1]) == value_1
-        assert await rollout_b.execute([c1, c2]) == value_2
-        assert await rollout_b.execute([c1, c2, c3]) == value_3
-        assert rollout_b.rollout_environment is None
+        assert await rollout_b.lookup_or_execute([c1]) == value_1
+        assert await rollout_b.lookup_or_execute([c1, c2]) == value_2
+        assert await rollout_b.lookup_or_execute([c1, c2, c3]) == value_3
+        assert rollout_b.rollout_sandbox is None
     assert len(MockToolCallEnv.execute_log) == executions_after_a, "hits must not execute"
 
     # Rollout C: shares the c1 prefix then diverges; must fork the snapshot
     # stored at [c1] and execute only the suffix.
     c5 = CommandToolCall("diverge")
     async with make_executor(task_id) as rollout_c:
-        value_5 = await rollout_c.execute([c1, c5])
+        value_5 = await rollout_c.lookup_or_execute([c1, c5])
         assert value_5 == f"result:{c5.serialize()}", value_5
         new_executions = MockToolCallEnv.execute_log[executions_after_a:]
         assert len(new_executions) == 1, f"fork must skip the matched prefix: {new_executions}"
-        forked_env_id = rollout_c.rollout_environment.get_id()
-        assert MockToolCallEnv.registry[forked_env_id] == [c1.serialize(), c5.serialize()]
+        forked_env_id = rollout_c.rollout_sandbox.get_id()
+        assert MockToolCallEnv.live[forked_env_id] == [c1.serialize(), c5.serialize()]
 
     # Rollout D: a hit in the middle must not discard the live sandbox; the
     # following miss fast-forwards it instead of replaying from scratch.
@@ -167,18 +120,18 @@ async def test_executor(client: TVCacheClient, prefix: str) -> tuple:
     c7 = CommandToolCall("fast-b")
     c8 = CommandToolCall("fast-c")
     async with make_executor(task_id) as rollout_d0:
-        await rollout_d0.execute([c6])
-        await rollout_d0.execute([c6, c7])
-        await rollout_d0.execute([c6, c7, c8])
+        await rollout_d0.lookup_or_execute([c6])
+        await rollout_d0.lookup_or_execute([c6, c7])
+        await rollout_d0.lookup_or_execute([c6, c7, c8])
 
     c9 = CommandToolCall("fast-d")
     async with make_executor(task_id) as rollout_d:
-        await rollout_d.execute([c6])            # miss already cached? no: cached by d0 -> hit
-        assert rollout_d.rollout_environment is None
-        await rollout_d.execute([c6, CommandToolCall("d-branch")])  # miss, fresh env, replay
-        live_env_id = rollout_d.rollout_environment.get_id()
-        await rollout_d.execute([c6, CommandToolCall("d-branch"), c7])  # miss, fast-forward
-        assert rollout_d.rollout_environment.get_id() == live_env_id, (
+        await rollout_d.lookup_or_execute([c6])            # miss already cached? no: cached by d0 -> hit
+        assert rollout_d.rollout_sandbox is None
+        await rollout_d.lookup_or_execute([c6, CommandToolCall("d-branch")])  # miss, fresh env, replay
+        live_env_id = rollout_d.rollout_sandbox.get_id()
+        await rollout_d.lookup_or_execute([c6, CommandToolCall("d-branch"), c7])  # miss, fast-forward
+        assert rollout_d.rollout_sandbox.get_id() == live_env_id, (
             "fast-forward must reuse the live sandbox"
         )
         before = len(MockToolCallEnv.execute_log)
@@ -191,14 +144,14 @@ async def test_executor(client: TVCacheClient, prefix: str) -> tuple:
             None,
             runtime=1,
         )
-        assert await rollout_d.execute(d_history + [c9]) == "pre-cached"
-        assert rollout_d.rollout_environment.get_id() == live_env_id
+        assert await rollout_d.lookup_or_execute(d_history + [c9]) == "pre-cached"
+        assert rollout_d.rollout_sandbox.get_id() == live_env_id
         assert len(MockToolCallEnv.execute_log) == before, "hit must not execute"
         # The next miss fast-forwards through the gap (re-executes c9) and the
         # new call, still in the same environment.
-        value_8 = await rollout_d.execute(d_history + [c9, c8])
+        value_8 = await rollout_d.lookup_or_execute(d_history + [c9, c8])
         assert value_8 == f"result:{c8.serialize()}", value_8
-        assert rollout_d.rollout_environment.get_id() == live_env_id
+        assert rollout_d.rollout_sandbox.get_id() == live_env_id
         gap_executions = MockToolCallEnv.execute_log[before:]
         assert len(gap_executions) == 2, f"gap + current expected: {gap_executions}"
 
@@ -233,12 +186,12 @@ async def test_fork_bank(client: TVCacheClient, executor_task_id: str, c1: Comma
 
     root_copies = bank.shelf.get((executor_task_id, "root"), [])
     assert len(root_copies) == 1, bank.shelf
-    assert MockToolCallEnv.registry[root_copies[0]] == []
+    assert MockToolCallEnv.live[root_copies[0]] == []
 
     hot_copies = bank.shelf.get((executor_task_id, c1_sandbox_id), [])
     assert len(hot_copies) == 1, f"expected a pre-forked copy of {c1_sandbox_id}: {bank.shelf}"
     shelved_env_id = hot_copies[0]
-    assert MockToolCallEnv.registry[shelved_env_id] == [c1.serialize()]
+    assert MockToolCallEnv.live[shelved_env_id] == [c1.serialize()]
 
     references = await sandbox_references(client, executor_task_id)
     assert references == {}, f"warm_up must release its leases: {references}"
@@ -247,8 +200,8 @@ async def test_fork_bank(client: TVCacheClient, executor_task_id: str, c1: Comma
     # forking synchronously.
     async with make_executor(executor_task_id) as rollout:
         rollout.set_fork_bank(bank)
-        await rollout.execute([c1, CommandToolCall("bank-branch")])
-        assert rollout.rollout_environment.get_id() == shelved_env_id, (
+        await rollout.lookup_or_execute([c1, CommandToolCall("bank-branch")])
+        assert rollout.rollout_sandbox.get_id() == shelved_env_id, (
             f"expected the bank copy {shelved_env_id} of {c1_sandbox_id}"
         )
     assert bank.shelf[(executor_task_id, c1_sandbox_id)] == [], "the copy must be consumed"
@@ -280,7 +233,7 @@ async def test_lifecycle(
     assert our_sandboxes <= drained_ours, (our_sandboxes, drained_ours)
     for sandbox_id in our_sandboxes:
         assert sandbox_id in MockToolCallEnv.stop_log, f"{sandbox_id} was not deleted"
-        assert sandbox_id not in MockToolCallEnv.registry
+        assert MockToolCallEnv.state_of(sandbox_id) is None
 
     await manager.close()
     print("lifecycle leg passed")
@@ -303,9 +256,9 @@ async def test_concurrency(client: TVCacheClient, prefix: str) -> None:
 
     async def rollout(index: int) -> None:
         async with make_executor(task_id) as executor:
-            await executor.execute([k1])
-            await executor.execute([k1, k2])
-            await executor.execute([k1, k2, variants[index % len(variants)]])
+            await executor.lookup_or_execute([k1])
+            await executor.lookup_or_execute([k1, k2])
+            await executor.lookup_or_execute([k1, k2, variants[index % len(variants)]])
 
     await asyncio.gather(*[rollout(index) for index in range(16)])
 

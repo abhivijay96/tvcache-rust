@@ -38,6 +38,12 @@ State for one task is a **Tool Call Graph (TCG)** — a prefix tree (trie):
   `value`, an optional `sandbox_id` (a cold snapshot handle for resuming),
   `runtime`, `ttl`, hit counters (`number_of_cache_hits`, `number_of_lpm_hits`),
   and its byte size.
+- **Writes** (`insert`): the parent must already exist, or the insert is refused.
+  Values are **first-writer-wins**: an identical value agrees, a different one is
+  refused, and a refused insert cannot attach a sandbox (a snapshot is only stored
+  next to the value it produced). Sandboxes are first-writer-wins too, and the TTL
+  clock only moves when a value is actually written. A node with no value
+  (a placeholder left by a failed stateful call) is a miss and accepts a value later.
 - **`find` is longest-prefix-match** (`src/tcg/tool_call_graph.rs`): it returns
   the exact-path `value` if present; otherwise the **deepest ancestor that owns a
   sandbox snapshot**, so the client forks from there and executes only the
@@ -67,18 +73,22 @@ Around the graph the server tracks:
 
 ```bash
 cargo run                       # listens on 0.0.0.0:7878
+cargo run -- --port=7879        # any port (tests run several servers side by side)
 cargo run -- --eviction-policy=ttl_and_watermark \
              --high-watermark-mb=1024 --low-watermark-mb=768
 RUST_LOG=debug cargo run        # tracing via EnvFilter
-cargo test
+cargo test                      # unit + model-based tests (no server needed)
 ```
+
+The correctness framework (tvverify, in `tvcache-workloads/correctness`) starts its own servers.
 
 `--eviction-policy` accepts `ttl_and_watermark` (default) or `none`.
 
 ## Wire protocol
 
-Binary, length-prefixed framing (`src/protocol_primitives.rs`). Each request
-starts with a `u8` tag; the response starts with its own `u8` tag. `tvclient`
+Binary (`src/protocol_primitives.rs`). Each request starts with a `u8` tag; the
+response starts with its own `u8` tag. Strings and paths carry length prefixes,
+but a request as a whole does not, so a new field needs a new tag. `tvclient`
 is the reference encoder/decoder.
 
 | Tag | Request | Purpose |
