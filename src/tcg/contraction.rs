@@ -110,6 +110,68 @@ fn sibling(node: &Node) -> Sibling {
     }
 }
 
+/// What a merge removed, for the graph's counters.
+#[derive(Debug, Default)]
+pub struct Merged {
+    pub absorbed_nodes: u32,
+    pub reclaimable_sandboxes: Vec<String>,
+}
+
+/// Absorbs b into a, recursively merging children that share a tool-call key.
+fn merge(a: &mut Node, b: Node, merged: &mut Merged) {
+    merged.absorbed_nodes += 1;
+    a.settled = false;
+    // On a key clash, keep a's entry but fill in what only b has.
+    for (key, entry) in b.tool_calls {
+        let kept = a.tool_calls.entry(key).or_default();
+        if kept.value.is_none() {
+            (kept.value, kept.runtime) = (entry.value, entry.runtime);
+        }
+        kept.embedding = kept.embedding.take().or(entry.embedding);
+    }
+    if let Some(sandbox_id) = b.sandbox_id {
+        if a.sandbox_id.is_none() {
+            a.sandbox_id = Some(sandbox_id);
+        } else {
+            merged.reclaimable_sandboxes.push(sandbox_id);
+        }
+    }
+
+    a.number_of_cache_hits += b.number_of_cache_hits;
+    a.number_of_lpm_hits += b.number_of_lpm_hits;
+    // A node without a TTL never expires, and otherwise the later expiry wins.
+    let a_expiry = a.inserted_at_seconds + a.ttl as u64;
+    if !b.ttl_present {
+        a.ttl_present = false;
+    } else if a.ttl_present && b.inserted_at_seconds + b.ttl as u64 > a_expiry {
+        a.inserted_at_seconds = b.inserted_at_seconds;
+        a.ttl = b.ttl;
+    }
+
+    let a_count = a.children.len();
+    let children: Vec<Node> = std::mem::take(&mut a.children)
+        .into_iter()
+        .chain(b.children)
+        .collect();
+    let components = key_components(&children);
+    let mut children: Vec<Option<Node>> = children.into_iter().map(Some).collect();
+    for component in components {
+        let mut survivor = children[component[0]].take().expect("Child already merged");
+        if component.len() > 1 {
+            // Siblings never share keys, so every multi-child component includes one of a's.
+            debug_assert!(component[0] < a_count);
+            for &index in &component[1..] {
+                let child = children[index].take().expect("Child already merged");
+                merge(&mut survivor, child, merged);
+            }
+        } else if component[0] >= a_count {
+            survivor.settled = false;
+        }
+        a.children.push(survivor);
+    }
+    a.update_size_in_bytes();
+}
+
 /// Groups nodes whose tool-call maps share a key, directly or through other nodes.
 /// Each component lists its indexes in ascending order, and components are
 /// ordered by their first index.
@@ -346,5 +408,118 @@ mod tests {
             let components = key_components(&nodes);
             assert_eq!(components, [vec![0, 5, 6], vec![1, 2, 4], vec![3], vec![7]]);
         }
+    }
+
+    fn tree(keys: &[&str], settled: bool, children: Vec<Node>) -> Node {
+        let mut node = Node::default();
+        for key in keys {
+            let entry = ToolCallEntry {
+                value: Some(key.to_string()),
+                ..Default::default()
+            };
+            node.tool_calls.insert(key.to_string(), entry);
+        }
+        node.settled = settled;
+        node.children = children;
+        node
+    }
+
+    fn leaf(keys: &[&str]) -> Node {
+        tree(keys, true, Vec::new())
+    }
+
+    #[test]
+    fn merge_combines_entries_snapshots_and_stats() {
+        let mut a = leaf(&["k", "both"]);
+        let mut b = leaf(&["k", "both", "alias"]);
+        a.tool_calls.get_mut("k").unwrap().value = None;
+        let k = b.tool_calls.get_mut("k").unwrap();
+        (k.value, k.runtime, k.embedding) = (Some("b".into()), 7, Some(vec![1.0]));
+        a.tool_calls.get_mut("both").unwrap().embedding = Some(vec![2.0]);
+        let both = b.tool_calls.get_mut("both").unwrap();
+        (both.value, both.runtime, both.embedding) = (Some("b".into()), 9, Some(vec![3.0]));
+        (a.sandbox_id, b.sandbox_id) = (Some("sa".into()), Some("sb".into()));
+        (a.number_of_cache_hits, a.number_of_lpm_hits) = (2, 1);
+        (b.number_of_cache_hits, b.number_of_lpm_hits) = (3, 4);
+
+        let mut merged = Merged::default();
+        merge(&mut a, b, &mut merged);
+        let k = &a.tool_calls["k"];
+        assert!(
+            k.value.as_deref() == Some("b") && k.runtime == 7 && k.embedding == Some(vec![1.0])
+        );
+        let both = &a.tool_calls["both"];
+        assert!(both.value.as_deref() == Some("both") && both.runtime == 0);
+        assert_eq!(both.embedding, Some(vec![2.0]));
+        assert!(
+            !a.settled
+                && a.tool_calls.contains_key("alias")
+                && a.sandbox_id.as_deref() == Some("sa")
+        );
+        assert_eq!(
+            (merged.absorbed_nodes, merged.reclaimable_sandboxes),
+            (1, vec!["sb".into()])
+        );
+        assert_eq!((a.number_of_cache_hits, a.number_of_lpm_hits), (5, 5));
+
+        // A missing snapshot is taken from b.
+        let mut b = tree(&["k"], false, Vec::new());
+        (a.sandbox_id, b.sandbox_id) = (None, Some("sb".into()));
+        let mut merged = Merged::default();
+        merge(&mut a, b, &mut merged);
+        assert!(a.sandbox_id.as_deref() == Some("sb") && merged.reclaimable_sandboxes.is_empty());
+    }
+
+    #[test]
+    fn merge_keeps_the_later_expiry() {
+        // Each TTL is (present, ttl, inserted_at_seconds).
+        for (a_ttl, b_ttl, expected) in [
+            ((true, 10, 100), (true, 5, 120), (true, 5, 120)),
+            ((true, 10, 100), (true, 5, 100), (true, 10, 100)),
+            ((true, 10, 100), (true, 5, 103), (true, 10, 100)),
+            ((false, 0, 100), (true, 5, 120), (false, 0, 100)),
+            ((true, 10, 100), (false, 0, 120), (false, 10, 100)),
+        ] {
+            let (mut a, mut b) = (leaf(&["k"]), leaf(&["k"]));
+            (a.ttl_present, a.ttl, a.inserted_at_seconds) = a_ttl;
+            (b.ttl_present, b.ttl, b.inserted_at_seconds) = b_ttl;
+            merge(&mut a, b, &mut Merged::default());
+            assert_eq!((a.ttl_present, a.ttl, a.inserted_at_seconds), expected);
+        }
+    }
+
+    #[test]
+    fn merge_recurses_into_children_with_shared_keys() {
+        let mut a_x = tree(&["x"], true, vec![leaf(&["g"])]);
+        a_x.sandbox_id = Some("sa".into());
+        let a_children = vec![a_x, leaf(&["y"]), leaf(&["z"]), leaf(&["q"])];
+        let mut b_x = tree(&["x"], true, vec![leaf(&["g"]), leaf(&["h"])]);
+        b_x.sandbox_id = Some("sb".into());
+        let b_children = vec![b_x, leaf(&["y", "z"]), leaf(&["n"])];
+        let mut a = tree(&["a"], true, a_children);
+
+        let mut merged = Merged::default();
+        merge(&mut a, tree(&["b"], true, b_children), &mut merged);
+        let summary = |node: &Node| {
+            let mut keys: Vec<&str> = node.tool_calls.keys().map(String::as_str).collect();
+            keys.sort();
+            (keys.join("+"), node.settled)
+        };
+        let children: Vec<_> = a.children.iter().map(summary).collect();
+        let expected = [("x", false), ("y+z", false), ("q", true), ("n", false)];
+        assert_eq!(
+            children,
+            expected.map(|(keys, settled)| (keys.to_string(), settled))
+        );
+        let grandchildren: Vec<_> = a.children[0].children.iter().map(summary).collect();
+        assert_eq!(
+            grandchildren,
+            [("g".to_string(), false), ("h".to_string(), false)]
+        );
+        assert_eq!(
+            (merged.absorbed_nodes, merged.reclaimable_sandboxes),
+            (5, vec!["sb".into()])
+        );
+        assert_eq!(a.walk_subtcg(0, &mut |count, _| count + 1), 7);
     }
 }
