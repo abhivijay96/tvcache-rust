@@ -1,4 +1,6 @@
 use crate::tcg::{Node, ToolCallGraph};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 
 /// A child with at least one similar sibling it may still need comparing with.
 #[derive(Debug)]
@@ -106,6 +108,49 @@ fn sibling(node: &Node) -> Sibling {
         settled: node.settled,
         has_snapshot: node.sandbox_id.is_some(),
     }
+}
+
+/// Groups nodes whose tool-call maps share a key, directly or through other nodes.
+/// Each component lists its indexes in ascending order, and components are
+/// ordered by their first index.
+fn key_components(nodes: &[Node]) -> Vec<Vec<usize>> {
+    fn find(roots: &mut [usize], mut index: usize) -> usize {
+        while roots[index] != index {
+            roots[index] = roots[roots[index]];
+            index = roots[index];
+        }
+        index
+    }
+
+    // Each set's root is its smallest index.
+    let mut roots: Vec<usize> = (0..nodes.len()).collect();
+    let mut owners: HashMap<&str, usize> = HashMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        for key in node.tool_calls.keys() {
+            match owners.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert(index);
+                }
+                Entry::Occupied(entry) => {
+                    let (a, b) = (find(&mut roots, index), find(&mut roots, *entry.get()));
+                    roots[a.max(b)] = a.min(b);
+                }
+            }
+        }
+    }
+
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    let mut component_of_root = vec![0; nodes.len()];
+    for index in 0..nodes.len() {
+        let root = find(&mut roots, index);
+        if root == index {
+            component_of_root[index] = components.len();
+            components.push(vec![index]);
+        } else {
+            components[component_of_root[root]].push(index);
+        }
+    }
+    components
 }
 
 fn embeddings(node: &Node) -> impl Iterator<Item = &[f32]> {
@@ -271,5 +316,35 @@ mod tests {
         assert!(!deeper && groups.len() == 1 && groups[0].parent_path == ["a", "x"]);
         let (deeper, groups) = graph.sibling_groups(9, 0.5);
         assert!(!deeper && groups.is_empty());
+    }
+
+    #[test]
+    fn key_components_join_nodes_through_shared_keys() {
+        let node = |keys: &[&str]| {
+            let mut node = Node::default();
+            for key in keys {
+                node.tool_calls
+                    .insert(key.to_string(), ToolCallEntry::default());
+            }
+            node
+        };
+        assert!(key_components(&[]).is_empty());
+
+        // b2 bridges a2 and a3, and b4 reaches a1 only through b3. Fresh maps
+        // vary key order, which decides the direction of each union.
+        for _ in 0..20 {
+            let nodes = [
+                node(&["k1"]),
+                node(&["k2"]),
+                node(&["k3"]),
+                node(&["k5"]),
+                node(&["k3", "k2"]),
+                node(&["k4", "k1"]),
+                node(&["k6", "k4"]),
+                node(&["k7"]),
+            ];
+            let components = key_components(&nodes);
+            assert_eq!(components, [vec![0, 5, 6], vec![1, 2, 4], vec![3], vec![7]]);
+        }
     }
 }
