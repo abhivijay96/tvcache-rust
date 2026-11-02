@@ -5,7 +5,7 @@ use tracing::error;
 
 use crate::{
     protocol_primitives,
-    tcg::contraction::SiblingGroup,
+    tcg::contraction::{class_call_count, SiblingGroup},
     tvcache::tcg_entries_to_json,
     types::{
         CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
@@ -182,6 +182,24 @@ impl RequestHandler {
                     task_id,
                     depth,
                     threshold,
+                })
+            }
+
+            13 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let parent_path = protocol_primitives::read_path(stream).await?;
+                let class_count = protocol_primitives::read_u16(stream).await?;
+                let mut classes = Vec::with_capacity(usize::from(class_count));
+                for _ in 0..class_count {
+                    classes.push(protocol_primitives::read_path(stream).await?);
+                }
+                let settled = protocol_primitives::read_path(stream).await?;
+
+                Ok(Request::ApplyContraction {
+                    task_id,
+                    parent_path,
+                    classes,
+                    settled,
                 })
             }
 
@@ -440,6 +458,32 @@ impl RequestHandler {
                     }
                 }
             }
+
+            Request::ApplyContraction {
+                task_id,
+                parent_path,
+                classes,
+                settled,
+            } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                // An unknown task skips every call, like a missing parent.
+                let (merged_classes, skipped_calls) = match tcg {
+                    Some(tcg) => {
+                        let mut tcg = tcg.lock().await;
+                        tcg.apply_contraction(&parent_path, &classes, &settled)
+                    }
+                    None => (0, class_call_count(&classes)),
+                };
+
+                Response::ContractionResult {
+                    merged_classes,
+                    skipped_calls,
+                }
+            }
         }
     }
 
@@ -535,6 +579,15 @@ impl RequestHandler {
                 protocol_primitives::write_u8(stream, 11).await?;
                 protocol_primitives::write_bool(stream, deeper_nodes_exist).await?;
                 self.write_sibling_groups(stream, &groups).await?;
+            }
+
+            Response::ContractionResult {
+                merged_classes,
+                skipped_calls,
+            } => {
+                protocol_primitives::write_u8(stream, 12).await?;
+                protocol_primitives::write_u32(stream, merged_classes).await?;
+                protocol_primitives::write_u32(stream, skipped_calls).await?;
             }
 
             Response::Error { message } => {

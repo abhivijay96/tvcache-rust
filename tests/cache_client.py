@@ -19,6 +19,7 @@ DRAIN_RECLAIMABLE_SANDBOXES_REQUEST = 7
 LIST_HOT_SANDBOXES_REQUEST = 8
 LEASE_SANDBOX_REQUEST = 11
 LIST_SIBLING_GROUPS_REQUEST = 12
+APPLY_CONTRACTION_REQUEST = 13
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
@@ -30,6 +31,7 @@ SANDBOX_CANDIDATES_RESPONSE = 7
 RECLAIMABLE_SANDBOXES_RESPONSE = 8
 LEASE_RESULT_RESPONSE = 10
 SIBLING_GROUPS_RESPONSE = 11
+CONTRACTION_RESULT_RESPONSE = 12
 
 
 def write_u8(value: int) -> bytes:
@@ -162,6 +164,19 @@ def encode_list_sibling_groups(task_id: str, depth: int, threshold: float) -> by
         + write_string_u16(task_id)
         + write_u16(depth)
         + struct.pack(">f", threshold)
+    )
+
+
+def encode_apply_contraction(
+    task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+) -> bytes:
+    return (
+        write_u8(APPLY_CONTRACTION_REQUEST)
+        + write_string_u16(task_id)
+        + write_path(parent_path)
+        + write_u16(len(classes))
+        + b"".join(write_path(calls) for calls in classes)
+        + write_path(settled)
     )
 
 
@@ -322,6 +337,13 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "groups": [read_sibling_group(sock) for _ in range(read_u16(sock))],
         }
 
+    if response_type == CONTRACTION_RESULT_RESPONSE:
+        return {
+            "type": "contraction_result",
+            "merged_classes": read_u32(sock),
+            "skipped_calls": read_u32(sock),
+        }
+
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
         count = read_u32(sock)
         return {
@@ -426,6 +448,11 @@ class CacheClient:
     def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
         return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
 
+    def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return self.send_request(encode_apply_contraction(task_id, parent_path, classes, settled))
+
     def dump_all(self) -> object:
         response = self.dump_all_response()
         if response["type"] == "error":
@@ -522,6 +549,11 @@ class PersistentCacheClient:
 
     def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
         return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
+    def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return self.send_request(encode_apply_contraction(task_id, parent_path, classes, settled))
 
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
@@ -692,6 +724,13 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
             ],
         }
 
+    if response_type == CONTRACTION_RESULT_RESPONSE:
+        return {
+            "type": "contraction_result",
+            "merged_classes": await async_read_u32(reader),
+            "skipped_calls": await async_read_u32(reader),
+        }
+
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
         count = await async_read_u32(reader)
         return {
@@ -804,3 +843,10 @@ class AsyncPersistentCacheClient:
         self, task_id: str, depth: int, threshold: float
     ) -> dict[str, Any]:
         return await self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
+    async def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return await self.send_request(
+            encode_apply_contraction(task_id, parent_path, classes, settled)
+        )

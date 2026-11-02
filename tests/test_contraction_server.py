@@ -107,11 +107,34 @@ async def test_sibling_groups(client: AsyncPersistentCacheClient) -> None:
         assert response == expected(deeper, []), response
 
 
+async def test_apply_contraction_smoke(client: AsyncPersistentCacheClient) -> None:
+    task_id = f"contraction-apply-{uuid4().hex}"
+    for path in (["p"], ["p", "a"], ["p", "b"]):
+        await client.insert(task_id, path, f"value-{path[-1]}", None, runtime=1)
+
+    classes = [["a", "b", "missing", "gone"]]
+    response = await client.apply_contraction(task_id, ["p"], classes, ["a"])
+    assert response == {"type": "contraction_result", "merged_classes": 1, "skipped_calls": 2}
+
+    response = await client.find(task_id, ["p", "b"])
+    assert response["value"] == "value-b", response
+    dump = json.loads((await client.dump_all_response())["json"])
+    [child] = dump_node(dump, task_id, ["p"])["children"]
+    assert set(child["tool_calls"]) == {"a", "b"} and child["settled"] is True, child
+
+    unknown_task_id = f"{task_id}-unknown"
+    response = await client.apply_contraction(unknown_task_id, [], [["a", "b"]], ["a"])
+    assert response == {"type": "contraction_result", "merged_classes": 0, "skipped_calls": 2}
+    dump = json.loads((await client.dump_all_response())["json"])
+    assert unknown_task_id not in dump, "expected an apply not to create a graph"
+
+
 async def run_tests() -> None:
     async with AsyncPersistentCacheClient("127.0.0.1", 7878) as client:
         await test_new_nodes_are_red(client)
         await test_lease_skips_hit_counts(client)
         await test_sibling_groups(client)
+        await test_apply_contraction_smoke(client)
     print("all contraction server tests passed")
 
 

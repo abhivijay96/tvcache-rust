@@ -87,7 +87,7 @@ impl ToolCallGraph {
         settled: &[String],
     ) -> (u32, u32) {
         if node_at_mut(&mut self.root, parent_path).is_none() {
-            return (0, classes.iter().map(|class| class.len() as u32).sum());
+            return (0, class_call_count(classes));
         }
         let (mut merged_classes, mut skipped_calls) = (0, 0);
         for class in classes {
@@ -118,6 +118,11 @@ impl ToolCallGraph {
         }
         (merged_classes, skipped_calls)
     }
+}
+
+/// Returns the number of calls across all classes.
+pub fn class_call_count(classes: &[Vec<String>]) -> u32 {
+    classes.iter().map(|class| class.len() as u32).sum()
 }
 
 fn node_at_mut<'a>(root: &'a mut Node, path: &[String]) -> Option<&'a mut Node> {

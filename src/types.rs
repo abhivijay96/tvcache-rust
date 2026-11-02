@@ -68,6 +68,12 @@ pub enum Request {
         depth: u16,
         threshold: f32,
     },
+    ApplyContraction {
+        task_id: String,
+        parent_path: Vec<String>,
+        classes: Vec<Vec<String>>,
+        settled: Vec<String>,
+    },
 }
 
 pub enum Response {
@@ -102,6 +108,10 @@ pub enum Response {
     SiblingGroups {
         deeper_nodes_exist: bool,
         groups: Vec<SiblingGroup>,
+    },
+    ContractionResult {
+        merged_classes: u32,
+        skipped_calls: u32,
     },
     Error {
         message: String,
