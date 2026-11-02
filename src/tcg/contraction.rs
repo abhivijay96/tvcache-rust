@@ -39,6 +39,51 @@ impl ToolCallGraph {
             .collect();
         (deeper_nodes_exist, groups)
     }
+
+    /// Merges the child named by absorbed_key into the one named by survivor_key.
+    /// Returns false if the parent or either child is missing, or both keys name one child.
+    pub fn merge_siblings(
+        &mut self,
+        parent_path: &[String],
+        survivor_key: &str,
+        absorbed_key: &str,
+    ) -> bool {
+        let mut merged = Merged::default();
+        let (size_before, size_after) = {
+            let mut parent = &mut self.root;
+            for key in parent_path {
+                let Some(child) = parent.child_mut(key) else {
+                    return false;
+                };
+                parent = child;
+            }
+            let distinct = parent
+                .child(survivor_key)
+                .is_some_and(|survivor| !survivor.tool_calls.contains_key(absorbed_key));
+            if !distinct {
+                return false;
+            }
+            let Some(absorbed) = parent.remove_child(absorbed_key) else {
+                return false;
+            };
+            let survivor = parent
+                .child_mut(survivor_key)
+                .expect("Survivor checked above");
+            let size_before = subtree_size(survivor) + subtree_size(&absorbed);
+            merge(survivor, absorbed, &mut merged);
+            (size_before, subtree_size(survivor))
+        };
+
+        self.number_of_nodes -= merged.absorbed_nodes;
+        self.number_of_sandboxes -= merged.reclaimable_sandboxes.len() as u32;
+        self.size_in_bytes = self.size_in_bytes - size_before + size_after;
+        self.add_reclaimable_sandboxes(&merged.reclaimable_sandboxes);
+        true
+    }
+}
+
+fn subtree_size(node: &Node) -> u64 {
+    node.walk_subtcg(0, &mut |total, node| total + node.size_in_bytes as u64)
 }
 
 fn collect_parents<'a>(
@@ -521,5 +566,91 @@ mod tests {
             (5, vec!["sb".into()])
         );
         assert_eq!(a.walk_subtcg(0, &mut |count, _| count + 1), 7);
+    }
+
+    #[test]
+    fn merge_siblings_keeps_graph_counters_consistent() {
+        let path = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+        let mut graph = ToolCallGraph::new();
+        for (keys, sandbox_id) in [
+            (&["p"][..], None),
+            (&["p", "a"], Some("sa")),
+            (&["p", "b"], Some("sb")),
+            (&["p", "c"], None),
+            (&["p", "a", "x"], None),
+            (&["p", "b", "x"], Some("sx")),
+            (&["p", "b", "y"], None),
+        ] {
+            let value = Some(keys.join("/"));
+            graph.insert(
+                path(keys),
+                value,
+                sandbox_id.map(String::from),
+                1,
+                None,
+                false,
+                None,
+            );
+        }
+        let assert_counters = |graph: &ToolCallGraph| {
+            let (mut nodes, mut sandboxes, mut size) = (0, 0, 0);
+            for child in &graph.root.children {
+                child.walk_subtcg((), &mut |_, node| {
+                    let mut fresh = node.clone();
+                    fresh.update_size_in_bytes();
+                    assert_eq!(node.size_in_bytes, fresh.size_in_bytes);
+                    (nodes, size) = (nodes + 1, size + node.size_in_bytes as u64);
+                    sandboxes += node.sandbox_id.is_some() as u32;
+                });
+            }
+            assert_eq!(
+                (graph.number_of_nodes, graph.number_of_sandboxes),
+                (nodes, sandboxes)
+            );
+            assert_eq!(graph.size_in_bytes, size);
+        };
+        assert_counters(&graph);
+        graph.lease_sandbox(&path(&["p", "b"]));
+
+        assert!(graph.merge_siblings(&path(&["p"]), "a", "b"));
+        assert_counters(&graph);
+        assert_eq!(graph.number_of_nodes, 5);
+        assert_eq!(graph.find(path(&["p", "b"])).0.as_deref(), Some("p/b"));
+        assert_eq!(
+            graph.find(path(&["p", "b", "y"])).0.as_deref(),
+            Some("p/b/y")
+        );
+        let reclaimable: Vec<&str> = graph
+            .reclaimable_sandboxes
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(reclaimable, ["sb"]);
+
+        // A leased snapshot is drained only after its lease is released.
+        assert!(graph.drain_reclaimable_sandboxes().is_empty());
+        graph.decrement_sandbox_reference("sb");
+        assert_eq!(graph.drain_reclaimable_sandboxes(), ["sb"]);
+
+        let counters = |graph: &ToolCallGraph| {
+            let nodes = graph.root.walk_subtcg(0, &mut |count, _| count + 1);
+            (
+                graph.number_of_nodes,
+                graph.number_of_sandboxes,
+                graph.size_in_bytes,
+                nodes,
+            )
+        };
+        let before = counters(&graph);
+        for (parent, survivor, absorbed) in [
+            (&["p"][..], "a", "b"),
+            (&["p"], "a", "z"),
+            (&["p"], "z", "c"),
+            (&["q"], "a", "c"),
+        ] {
+            assert!(!graph.merge_siblings(&path(parent), survivor, absorbed));
+        }
+        assert_eq!(counters(&graph), before);
+        assert_counters(&graph);
     }
 }
