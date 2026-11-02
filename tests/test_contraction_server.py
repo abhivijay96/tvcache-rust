@@ -59,10 +59,59 @@ async def test_lease_skips_hit_counts(client: AsyncPersistentCacheClient) -> Non
     assert snapshot in await drained_ids(client)
 
 
+async def test_sibling_groups(client: AsyncPersistentCacheClient) -> None:
+    task_id = f"contraction-siblings-{uuid4().hex}"
+    for path, embedding, snapshot in (
+        (["a"], None, None),
+        (["b"], None, None),
+        (["a", "x"], [1.0, 0.0], None),
+        (["a", "y"], [0.0, 1.0], None),
+        (["b", "z"], [1.0, 0.0], None),
+        (["b", "missing"], None, None),
+        (["b", "v"], [0.6, 0.8], f"snapshot-{task_id}"),
+        (["b", "wide"], [1.0, 0.0, 0.0], None),
+        (["b", "z", "w"], None, None),
+    ):
+        await client.insert(task_id, path, "value", snapshot, runtime=1, embedding=embedding)
+
+    def expected(deeper_nodes_exist: bool, groups: list) -> dict:
+        return {
+            "type": "sibling_groups",
+            "deeper_nodes_exist": deeper_nodes_exist,
+            "groups": groups,
+        }
+
+    response = await client.list_sibling_groups(task_id, 1, 0.5)
+    assert response == expected(True, []), response
+
+    # Missing embeddings and mismatched dimensions never pair, and cousins x and z stay apart.
+    response = await client.list_sibling_groups(task_id, 2, 0.5)
+    assert response["deeper_nodes_exist"] and len(response["groups"]) == 1, response
+    [group] = response["groups"]
+    assert group["parent_path"] == ["b"], group
+    assert group["children"] == [
+        {"keys": ["z"], "settled": False, "has_snapshot": False},
+        {"keys": ["v"], "settled": False, "has_snapshot": True},
+    ], group
+    assert len(group["pairs"]) == 1, group
+    [(i, j, score)] = group["pairs"]
+    assert (i, j) == (0, 1) and abs(score - 0.6) < 1e-6, group
+
+    for task, depth, threshold, deeper in (
+        (task_id, 2, 0.61, True),
+        (task_id, 3, 0.0, False),
+        (task_id, 4, 0.0, False),
+        (f"{task_id}-unknown", 1, 0.0, False),
+    ):
+        response = await client.list_sibling_groups(task, depth, threshold)
+        assert response == expected(deeper, []), response
+
+
 async def run_tests() -> None:
     async with AsyncPersistentCacheClient("127.0.0.1", 7878) as client:
         await test_new_nodes_are_red(client)
         await test_lease_skips_hit_counts(client)
+        await test_sibling_groups(client)
     print("all contraction server tests passed")
 
 

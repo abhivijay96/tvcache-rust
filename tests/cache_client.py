@@ -18,6 +18,7 @@ LIST_SANDBOX_CANDIDATES_REQUEST = 6
 DRAIN_RECLAIMABLE_SANDBOXES_REQUEST = 7
 LIST_HOT_SANDBOXES_REQUEST = 8
 LEASE_SANDBOX_REQUEST = 11
+LIST_SIBLING_GROUPS_REQUEST = 12
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
@@ -28,6 +29,7 @@ MARK_SANDBOXES_EVICTED_RESULT_RESPONSE = 6
 SANDBOX_CANDIDATES_RESPONSE = 7
 RECLAIMABLE_SANDBOXES_RESPONSE = 8
 LEASE_RESULT_RESPONSE = 10
+SIBLING_GROUPS_RESPONSE = 11
 
 
 def write_u8(value: int) -> bytes:
@@ -154,6 +156,15 @@ def encode_lease_sandbox(task_id: str, path: list[str]) -> bytes:
     return write_u8(LEASE_SANDBOX_REQUEST) + write_string_u16(task_id) + write_path(path)
 
 
+def encode_list_sibling_groups(task_id: str, depth: int, threshold: float) -> bytes:
+    return (
+        write_u8(LIST_SIBLING_GROUPS_REQUEST)
+        + write_string_u16(task_id)
+        + write_u16(depth)
+        + struct.pack(">f", threshold)
+    )
+
+
 def read_exact(sock: socket.socket, size: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < size:
@@ -187,6 +198,10 @@ def read_u32(sock: socket.socket) -> int:
 
 def read_u64(sock: socket.socket) -> int:
     return struct.unpack(">Q", read_exact(sock, 8))[0]
+
+
+def read_f32(sock: socket.socket) -> float:
+    return struct.unpack(">f", read_exact(sock, 4))[0]
 
 
 def read_string_u16(sock: socket.socket) -> str:
@@ -232,6 +247,17 @@ def read_sandbox_candidate(sock: socket.socket) -> dict[str, Any]:
 def read_sandbox_candidates(sock: socket.socket) -> list[dict[str, Any]]:
     count = read_u16(sock)
     return [read_sandbox_candidate(sock) for _ in range(count)]
+
+
+def read_sibling_group(sock: socket.socket) -> dict[str, Any]:
+    return {
+        "parent_path": read_path(sock),
+        "children": [
+            {"keys": read_path(sock), "settled": read_bool(sock), "has_snapshot": read_bool(sock)}
+            for _ in range(read_u16(sock))
+        ],
+        "pairs": [(read_u16(sock), read_u16(sock), read_f32(sock)) for _ in range(read_u32(sock))],
+    }
 
 
 def decode_response(sock: socket.socket) -> dict[str, Any]:
@@ -287,6 +313,13 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "type": "lease_result",
             "sandbox_path": read_optional_path(sock),
             "sandbox_id": read_optional_string_u16(sock),
+        }
+
+    if response_type == SIBLING_GROUPS_RESPONSE:
+        return {
+            "type": "sibling_groups",
+            "deeper_nodes_exist": read_bool(sock),
+            "groups": [read_sibling_group(sock) for _ in range(read_u16(sock))],
         }
 
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
@@ -390,6 +423,9 @@ class CacheClient:
     def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_lease_sandbox(task_id, path))
 
+    def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
+        return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
     def dump_all(self) -> object:
         response = self.dump_all_response()
         if response["type"] == "error":
@@ -484,6 +520,9 @@ class PersistentCacheClient:
     def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_lease_sandbox(task_id, path))
 
+    def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
+        return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
     return struct.unpack(">B", await reader.readexactly(1))[0]
@@ -508,6 +547,10 @@ async def async_read_u32(reader: asyncio.StreamReader) -> int:
 
 async def async_read_u64(reader: asyncio.StreamReader) -> int:
     return struct.unpack(">Q", await reader.readexactly(8))[0]
+
+
+async def async_read_f32(reader: asyncio.StreamReader) -> float:
+    return struct.unpack(">f", await reader.readexactly(4))[0]
 
 
 async def async_read_string_u16(reader: asyncio.StreamReader) -> str:
@@ -563,6 +606,28 @@ async def async_read_sandbox_candidates(
     return [await async_read_sandbox_candidate(reader) for _ in range(count)]
 
 
+async def async_read_sibling_group(reader: asyncio.StreamReader) -> dict[str, Any]:
+    return {
+        "parent_path": await async_read_path(reader),
+        "children": [
+            {
+                "keys": await async_read_path(reader),
+                "settled": await async_read_bool(reader),
+                "has_snapshot": await async_read_bool(reader),
+            }
+            for _ in range(await async_read_u16(reader))
+        ],
+        "pairs": [
+            (
+                await async_read_u16(reader),
+                await async_read_u16(reader),
+                await async_read_f32(reader),
+            )
+            for _ in range(await async_read_u32(reader))
+        ],
+    }
+
+
 async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
     response_type = await async_read_u8(reader)
 
@@ -616,6 +681,15 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
             "type": "lease_result",
             "sandbox_path": await async_read_optional_path(reader),
             "sandbox_id": await async_read_optional_string_u16(reader),
+        }
+
+    if response_type == SIBLING_GROUPS_RESPONSE:
+        return {
+            "type": "sibling_groups",
+            "deeper_nodes_exist": await async_read_bool(reader),
+            "groups": [
+                await async_read_sibling_group(reader) for _ in range(await async_read_u16(reader))
+            ],
         }
 
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
@@ -725,3 +799,8 @@ class AsyncPersistentCacheClient:
 
     async def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return await self.send_request(encode_lease_sandbox(task_id, path))
+
+    async def list_sibling_groups(
+        self, task_id: str, depth: int, threshold: float
+    ) -> dict[str, Any]:
+        return await self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
