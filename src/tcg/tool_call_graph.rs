@@ -55,10 +55,7 @@ impl ToolCallGraph {
                 if is_new_node {
                     self.number_of_nodes += 1;
                 }
-                let entry = new_node
-                    .tool_calls
-                    .get_mut(&p)
-                    .expect("Missing tool-call key");
+                let entry = new_node.tool_calls.get_mut(&p).expect("Missing tool call");
 
                 // Merge semantics: absent fields leave existing node state
                 // untouched, so an insert with only sandbox cannot destroy a cached
@@ -364,7 +361,12 @@ mod tests {
 
     #[test]
     fn lease_returns_deepest_snapshot_without_counting_hits() {
-        let path = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+        let path = |calls: &[&str]| {
+            calls
+                .iter()
+                .map(|call| call.to_string())
+                .collect::<Vec<_>>()
+        };
         let mut graph = ToolCallGraph::new();
         graph.insert(
             path(&["a"]),

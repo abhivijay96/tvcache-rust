@@ -253,7 +253,7 @@ def read_sibling_group(sock: socket.socket) -> dict[str, Any]:
     return {
         "parent_path": read_path(sock),
         "children": [
-            {"keys": read_path(sock), "settled": read_bool(sock), "has_snapshot": read_bool(sock)}
+            {"calls": read_path(sock), "settled": read_bool(sock), "has_snapshot": read_bool(sock)}
             for _ in range(read_u16(sock))
         ],
         "pairs": [(read_u16(sock), read_u16(sock), read_f32(sock)) for _ in range(read_u32(sock))],
@@ -338,9 +338,9 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
     raise ValueError(f"unknown response type: {response_type}")
 
 
-def dump_child(node: dict[str, Any], key: str) -> dict[str, Any] | None:
-    """Returns the dumped child whose tool calls include key."""
-    return next((child for child in node["children"] if key in child["tool_calls"]), None)
+def dump_child(node: dict[str, Any], call: str) -> dict[str, Any] | None:
+    """Returns the dumped child whose tool calls include call."""
+    return next((child for child in node["children"] if call in child["tool_calls"]), None)
 
 
 def dump_node(dump: dict[str, Any], task_id: str, path: list[str]) -> dict[str, Any] | None:
@@ -349,8 +349,8 @@ def dump_node(dump: dict[str, Any], task_id: str, path: list[str]) -> dict[str, 
     if graph is None:
         return None
     node = graph["root"]
-    for key in path:
-        node = dump_child(node, key)
+    for call in path:
+        node = dump_child(node, call)
         if node is None:
             return None
     return {**node, **node["tool_calls"][path[-1]]} if path else node
@@ -611,7 +611,7 @@ async def async_read_sibling_group(reader: asyncio.StreamReader) -> dict[str, An
         "parent_path": await async_read_path(reader),
         "children": [
             {
-                "keys": await async_read_path(reader),
+                "calls": await async_read_path(reader),
                 "settled": await async_read_bool(reader),
                 "has_snapshot": await async_read_bool(reader),
             }

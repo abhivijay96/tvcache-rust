@@ -405,23 +405,23 @@
 
     function toTreeNode(node, parentPath) {
       const toolCalls = node.tool_calls || {};
-      const keys = Object.keys(toolCalls).sort((a, b) => a.localeCompare(b));
-      // Any of a node's keys reaches it, so the first one names it.
-      const entry = keys.length ? toolCalls[keys[0]] : {};
-      const path = keys.length ? parentPath.concat(keys[0]) : parentPath;
+      const calls = Object.keys(toolCalls).sort((a, b) => a.localeCompare(b));
+      // Any of a node's calls reaches it, so the first one names it.
+      const entry = calls.length ? toolCalls[calls[0]] : {};
+      const path = calls.length ? parentPath.concat(calls[0]) : parentPath;
       const children = (node.children || [])
         .map(child => toTreeNode(child, path))
-        .sort((a, b) => a.key.localeCompare(b.key));
+        .sort((a, b) => a.call.localeCompare(b.call));
 
       return {
-        key: keys[0] ?? "root",
-        keys,
+        call: calls[0] ?? "root",
+        calls,
         path,
         value: entry.value ?? null,
         sandbox_id: node.sandbox_id ?? null,
         runtime: entry.runtime ?? 0,
         child_count: children.length,
-        embeddings: keys.map(key => toolCalls[key].embedding).filter(Array.isArray),
+        embeddings: calls.map(call => toolCalls[call].embedding).filter(Array.isArray),
         attributes: node,
         children
       };
@@ -491,9 +491,9 @@
         rows.push(row(name, display(value)));
       }
 
-      data.keys.forEach((key, index) => {
-        const { embedding, ...entryFields } = toolCalls[key];
-        const entryRows = [row(`tool call ${index + 1} of ${data.keys.length}`, key)];
+      data.calls.forEach((call, index) => {
+        const { embedding, ...entryFields } = toolCalls[call];
+        const entryRows = [row(`tool call ${index + 1} of ${data.calls.length}`, call)];
         for (const [name, value] of Object.entries(entryFields)) {
           entryRows.push(row(name, display(value)));
         }
@@ -641,7 +641,7 @@
         .html(d => {
           const data = d.data;
           return `
-          <div class="node-header">${escapeHtml(data.key)}${data.keys.length > 1 ? escapeHtml(` (+${data.keys.length - 1} more)`) : ""}</div>
+          <div class="node-header">${escapeHtml(data.call)}${data.calls.length > 1 ? escapeHtml(` (+${data.calls.length - 1} more)`) : ""}</div>
           <div class="node-body">
             <div class="field"><span>value</span><span>${escapeHtml(display(data.value))}</span></div>
             <div class="field"><span>sandbox</span><span>${escapeHtml(display(data.sandbox_id))}</span></div>

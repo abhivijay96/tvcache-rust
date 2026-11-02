@@ -24,34 +24,34 @@ pub struct Node {
 }
 
 impl Node {
-    fn child_index(&self, key: &str) -> Option<usize> {
+    fn child_index(&self, call: &str) -> Option<usize> {
         self.children
             .iter()
-            .position(|child| child.tool_calls.contains_key(key))
+            .position(|child| child.tool_calls.contains_key(call))
     }
 
-    pub fn child(&self, key: &str) -> Option<&Node> {
-        Some(&self.children[self.child_index(key)?])
+    pub fn child(&self, call: &str) -> Option<&Node> {
+        Some(&self.children[self.child_index(call)?])
     }
 
-    pub fn child_mut(&mut self, key: &str) -> Option<&mut Node> {
-        let index = self.child_index(key)?;
+    pub fn child_mut(&mut self, call: &str) -> Option<&mut Node> {
+        let index = self.child_index(call)?;
         Some(&mut self.children[index])
     }
 
     /// Returns the child and whether it was newly created.
-    pub fn get_or_create_child(&mut self, key: String) -> (&mut Node, bool) {
-        if let Some(index) = self.child_index(&key) {
+    pub fn get_or_create_child(&mut self, call: String) -> (&mut Node, bool) {
+        if let Some(index) = self.child_index(&call) {
             return (&mut self.children[index], false);
         }
         let mut node = Node::default();
-        node.tool_calls.insert(key, ToolCallEntry::default());
+        node.tool_calls.insert(call, ToolCallEntry::default());
         self.children.push(node);
         (self.children.last_mut().unwrap(), true)
     }
 
-    pub fn remove_child(&mut self, key: &str) -> Option<Node> {
-        let index = self.child_index(key)?;
+    pub fn remove_child(&mut self, call: &str) -> Option<Node> {
+        let index = self.child_index(call)?;
         Some(self.children.remove(index))
     }
 
@@ -62,11 +62,11 @@ impl Node {
         self.children.retain_mut(keep);
     }
 
-    /// Yields one representative tool-call key and node per child.
+    /// Yields one representative tool call and node per child.
     pub fn iter_children(&self) -> impl Iterator<Item = (&String, &Node)> {
         self.children.iter().map(|child| {
-            let key = child.tool_calls.keys().next();
-            (key.expect("Child without tool calls"), child)
+            let call = child.tool_calls.keys().next();
+            (call.expect("Child without tool calls"), child)
         })
     }
 
@@ -87,8 +87,8 @@ impl Node {
         let entries_size_in_bytes: u32 = self
             .tool_calls
             .iter()
-            .map(|(key, entry)| {
-                key.len() as u32
+            .map(|(call, entry)| {
+                call.len() as u32
                     + entry.value.as_ref().map_or(0, |value| value.len() as u32)
                     + size_of_val(&entry.runtime) as u32
                     + entry
@@ -119,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn children_resolve_through_any_tool_call_key() {
+    fn children_resolve_through_any_tool_call() {
         let mut root = Node::default();
         let (child, is_new) = root.get_or_create_child("a".into());
         assert!(is_new);
@@ -133,8 +133,8 @@ mod tests {
         assert!(!is_new && child.tool_calls.contains_key("a"));
         assert!(root.child("a").is_some() && root.child("missing").is_none());
         assert_eq!(root.iter_children().count(), 2);
-        for (key, child) in root.iter_children() {
-            assert!(child.tool_calls.contains_key(key));
+        for (call, child) in root.iter_children() {
+            assert!(child.tool_calls.contains_key(call));
         }
 
         assert!(root

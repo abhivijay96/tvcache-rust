@@ -93,7 +93,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float | None:
 def print_sibling_similarities(node: dict[str, Any], path: list[str]) -> None:
     """Prints the similarity of every pair of embedded siblings, as stored on the server."""
     children = {
-        " / ".join(sorted(json.loads(key)["command"] for key in child["tool_calls"])): child
+        " / ".join(sorted(json.loads(call)["command"] for call in child["tool_calls"])): child
         for child in node["children"]
     }
     embedded = {}

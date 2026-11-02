@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// A child with at least one similar sibling it may still need comparing with.
 #[derive(Debug)]
 pub struct Sibling {
-    pub keys: Vec<String>,
+    pub calls: Vec<String>,
     pub settled: bool,
     pub has_snapshot: bool,
 }
@@ -40,34 +40,34 @@ impl ToolCallGraph {
         (deeper_nodes_exist, groups)
     }
 
-    /// Merges the child named by absorbed_key into the one named by survivor_key.
-    /// Returns false if the parent or either child is missing, or both keys name one child.
+    /// Merges the child named by absorbed_call into the one named by survivor_call.
+    /// Returns false if the parent or either child is missing, or both calls name one child.
     pub fn merge_siblings(
         &mut self,
         parent_path: &[String],
-        survivor_key: &str,
-        absorbed_key: &str,
+        survivor_call: &str,
+        absorbed_call: &str,
     ) -> bool {
         let mut merged = Merged::default();
         let (size_before, size_after) = {
             let mut parent = &mut self.root;
-            for key in parent_path {
-                let Some(child) = parent.child_mut(key) else {
+            for call in parent_path {
+                let Some(child) = parent.child_mut(call) else {
                     return false;
                 };
                 parent = child;
             }
             let distinct = parent
-                .child(survivor_key)
-                .is_some_and(|survivor| !survivor.tool_calls.contains_key(absorbed_key));
+                .child(survivor_call)
+                .is_some_and(|survivor| !survivor.tool_calls.contains_key(absorbed_call));
             if !distinct {
                 return false;
             }
-            let Some(absorbed) = parent.remove_child(absorbed_key) else {
+            let Some(absorbed) = parent.remove_child(absorbed_call) else {
                 return false;
             };
             let survivor = parent
-                .child_mut(survivor_key)
+                .child_mut(survivor_call)
                 .expect("Survivor checked above");
             let size_before = subtree_size(survivor) + subtree_size(&absorbed);
             merge(survivor, absorbed, &mut merged);
@@ -96,8 +96,8 @@ fn collect_parents<'a>(
         parents.push((path.clone(), node));
         return;
     }
-    for (key, child) in node.iter_children() {
-        path.push(key.clone());
+    for (call, child) in node.iter_children() {
+        path.push(call.clone());
         collect_parents(child, remaining_depth - 1, path, parents);
         path.pop();
     }
@@ -146,10 +146,10 @@ fn sibling_group(parent_path: Vec<String>, parent: &Node, threshold: f32) -> Opt
 }
 
 fn sibling(node: &Node) -> Sibling {
-    let mut keys: Vec<String> = node.tool_calls.keys().cloned().collect();
-    keys.sort();
+    let mut calls: Vec<String> = node.tool_calls.keys().cloned().collect();
+    calls.sort();
     Sibling {
-        keys,
+        calls,
         settled: node.settled,
         has_snapshot: node.sandbox_id.is_some(),
     }
@@ -162,13 +162,13 @@ pub struct Merged {
     pub reclaimable_sandboxes: Vec<String>,
 }
 
-/// Absorbs b into a, recursively merging children that share a tool-call key.
+/// Absorbs b into a, recursively merging children that share a tool call.
 fn merge(a: &mut Node, b: Node, merged: &mut Merged) {
     merged.absorbed_nodes += 1;
     a.settled = false;
-    // On a key clash, keep a's entry but fill in what only b has.
-    for (key, entry) in b.tool_calls {
-        let kept = a.tool_calls.entry(key).or_default();
+    // When both hold a call, keep a's entry but fill in what only b has.
+    for (call, entry) in b.tool_calls {
+        let kept = a.tool_calls.entry(call).or_default();
         if kept.value.is_none() {
             (kept.value, kept.runtime) = (entry.value, entry.runtime);
         }
@@ -198,12 +198,12 @@ fn merge(a: &mut Node, b: Node, merged: &mut Merged) {
         .into_iter()
         .chain(b.children)
         .collect();
-    let components = key_components(&children);
+    let components = call_components(&children);
     let mut children: Vec<Option<Node>> = children.into_iter().map(Some).collect();
     for component in components {
         let mut survivor = children[component[0]].take().expect("Child already merged");
         if component.len() > 1 {
-            // Siblings never share keys, so every multi-child component includes one of a's.
+            // Siblings never share calls, so every multi-child component includes one of a's.
             debug_assert!(component[0] < a_count);
             for &index in &component[1..] {
                 let child = children[index].take().expect("Child already merged");
@@ -217,10 +217,10 @@ fn merge(a: &mut Node, b: Node, merged: &mut Merged) {
     a.update_size_in_bytes();
 }
 
-/// Groups nodes whose tool-call maps share a key, directly or through other nodes.
+/// Groups nodes that share a tool call, directly or through other nodes.
 /// Each component lists its indexes in ascending order, and components are
 /// ordered by their first index.
-fn key_components(nodes: &[Node]) -> Vec<Vec<usize>> {
+fn call_components(nodes: &[Node]) -> Vec<Vec<usize>> {
     fn find(roots: &mut [usize], mut index: usize) -> usize {
         while roots[index] != index {
             roots[index] = roots[roots[index]];
@@ -233,8 +233,8 @@ fn key_components(nodes: &[Node]) -> Vec<Vec<usize>> {
     let mut roots: Vec<usize> = (0..nodes.len()).collect();
     let mut owners: HashMap<&str, usize> = HashMap::new();
     for (index, node) in nodes.iter().enumerate() {
-        for key in node.tool_calls.keys() {
-            match owners.entry(key) {
+        for call in node.tool_calls.keys() {
+            match owners.entry(call) {
                 Entry::Vacant(entry) => {
                     entry.insert(index);
                 }
@@ -339,18 +339,18 @@ mod tests {
     }
 
     fn insert(graph: &mut ToolCallGraph, path: &[&str], embedding: Option<Vec<f32>>) {
-        let path = path.iter().map(|key| key.to_string()).collect();
+        let path = path.iter().map(|call| call.to_string()).collect();
         graph.insert(path, None, None, 1, None, false, embedding);
     }
 
     fn summary(group: &SiblingGroup) -> (Vec<String>, Vec<(usize, usize, i32)>) {
-        let keys = group.children.iter().map(|child| child.keys.join("+"));
+        let calls = group.children.iter().map(|child| child.calls.join("+"));
         let percent = |score: f32| (score * 100.0).round() as i32;
         let pairs = group
             .pairs
             .iter()
             .map(|&(i, j, score)| (i, j, percent(score)));
-        (keys.collect(), pairs.collect())
+        (calls.collect(), pairs.collect())
     }
 
     #[test]
@@ -373,15 +373,15 @@ mod tests {
         assert!(sibling_group(Vec::new(), &graph.root, 0.81).is_none());
 
         // Blue pairs are skipped, and only children in some pair are listed.
-        for key in ["a", "b"] {
-            graph.root.child_mut(key).unwrap().settled = true;
+        for call in ["a", "b"] {
+            graph.root.child_mut(call).unwrap().settled = true;
         }
         let group = sibling_group(Vec::new(), &graph.root, 0.6).unwrap();
         let expected = vec!["b".to_string(), "c".into()];
         assert_eq!(summary(&group), (expected, vec![(0, 1, 60)]));
         assert!(group.children[0].settled && !group.children[1].settled);
 
-        // A merged node lists every key and pairs through its closest embedded entry.
+        // A merged node lists every call and pairs through its closest embedded entry.
         let alias = ToolCallEntry {
             embedding: Some(vec![1.0, 0.0]),
             ..Default::default()
@@ -426,51 +426,51 @@ mod tests {
     }
 
     #[test]
-    fn key_components_join_nodes_through_shared_keys() {
-        let node = |keys: &[&str]| {
+    fn call_components_join_nodes_through_shared_calls() {
+        let node = |calls: &[&str]| {
             let mut node = Node::default();
-            for key in keys {
+            for call in calls {
                 node.tool_calls
-                    .insert(key.to_string(), ToolCallEntry::default());
+                    .insert(call.to_string(), ToolCallEntry::default());
             }
             node
         };
-        assert!(key_components(&[]).is_empty());
+        assert!(call_components(&[]).is_empty());
 
         // b2 bridges a2 and a3, and b4 reaches a1 only through b3. Fresh maps
-        // vary key order, which decides the direction of each union.
+        // vary iteration order, which decides the direction of each union.
         for _ in 0..20 {
             let nodes = [
-                node(&["k1"]),
-                node(&["k2"]),
-                node(&["k3"]),
-                node(&["k5"]),
-                node(&["k3", "k2"]),
-                node(&["k4", "k1"]),
-                node(&["k6", "k4"]),
-                node(&["k7"]),
+                node(&["c1"]),
+                node(&["c2"]),
+                node(&["c3"]),
+                node(&["c5"]),
+                node(&["c3", "c2"]),
+                node(&["c4", "c1"]),
+                node(&["c6", "c4"]),
+                node(&["c7"]),
             ];
-            let components = key_components(&nodes);
+            let components = call_components(&nodes);
             assert_eq!(components, [vec![0, 5, 6], vec![1, 2, 4], vec![3], vec![7]]);
         }
     }
 
-    fn tree(keys: &[&str], settled: bool, children: Vec<Node>) -> Node {
+    fn tree(calls: &[&str], settled: bool, children: Vec<Node>) -> Node {
         let mut node = Node::default();
-        for key in keys {
+        for call in calls {
             let entry = ToolCallEntry {
-                value: Some(key.to_string()),
+                value: Some(call.to_string()),
                 ..Default::default()
             };
-            node.tool_calls.insert(key.to_string(), entry);
+            node.tool_calls.insert(call.to_string(), entry);
         }
         node.settled = settled;
         node.children = children;
         node
     }
 
-    fn leaf(keys: &[&str]) -> Node {
-        tree(keys, true, Vec::new())
+    fn leaf(calls: &[&str]) -> Node {
+        tree(calls, true, Vec::new())
     }
 
     #[test]
@@ -534,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_recurses_into_children_with_shared_keys() {
+    fn merge_recurses_into_children_with_shared_calls() {
         let mut a_x = tree(&["x"], true, vec![leaf(&["g"])]);
         a_x.sandbox_id = Some("sa".into());
         let a_children = vec![a_x, leaf(&["y"]), leaf(&["z"]), leaf(&["q"])];
@@ -546,15 +546,15 @@ mod tests {
         let mut merged = Merged::default();
         merge(&mut a, tree(&["b"], true, b_children), &mut merged);
         let summary = |node: &Node| {
-            let mut keys: Vec<&str> = node.tool_calls.keys().map(String::as_str).collect();
-            keys.sort();
-            (keys.join("+"), node.settled)
+            let mut calls: Vec<&str> = node.tool_calls.keys().map(String::as_str).collect();
+            calls.sort();
+            (calls.join("+"), node.settled)
         };
         let children: Vec<_> = a.children.iter().map(summary).collect();
         let expected = [("x", false), ("y+z", false), ("q", true), ("n", false)];
         assert_eq!(
             children,
-            expected.map(|(keys, settled)| (keys.to_string(), settled))
+            expected.map(|(calls, settled)| (calls.to_string(), settled))
         );
         let grandchildren: Vec<_> = a.children[0].children.iter().map(summary).collect();
         assert_eq!(
@@ -570,9 +570,14 @@ mod tests {
 
     #[test]
     fn merge_siblings_keeps_graph_counters_consistent() {
-        let path = |keys: &[&str]| keys.iter().map(|key| key.to_string()).collect::<Vec<_>>();
+        let path = |calls: &[&str]| {
+            calls
+                .iter()
+                .map(|call| call.to_string())
+                .collect::<Vec<_>>()
+        };
         let mut graph = ToolCallGraph::new();
-        for (keys, sandbox_id) in [
+        for (calls, sandbox_id) in [
             (&["p"][..], None),
             (&["p", "a"], Some("sa")),
             (&["p", "b"], Some("sb")),
@@ -581,9 +586,9 @@ mod tests {
             (&["p", "b", "x"], Some("sx")),
             (&["p", "b", "y"], None),
         ] {
-            let value = Some(keys.join("/"));
+            let value = Some(calls.join("/"));
             graph.insert(
-                path(keys),
+                path(calls),
                 value,
                 sandbox_id.map(String::from),
                 1,

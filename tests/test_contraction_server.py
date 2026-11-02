@@ -90,8 +90,8 @@ async def test_sibling_groups(client: AsyncPersistentCacheClient) -> None:
     [group] = response["groups"]
     assert group["parent_path"] == ["b"], group
     assert group["children"] == [
-        {"keys": ["z"], "settled": False, "has_snapshot": False},
-        {"keys": ["v"], "settled": False, "has_snapshot": True},
+        {"calls": ["z"], "settled": False, "has_snapshot": False},
+        {"calls": ["v"], "settled": False, "has_snapshot": True},
     ], group
     assert len(group["pairs"]) == 1, group
     [(i, j, score)] = group["pairs"]

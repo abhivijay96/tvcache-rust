@@ -614,7 +614,7 @@ impl RequestHandler {
             protocol_primitives::write_u16(stream, group.children.len() as u16).await?;
 
             for sibling in &group.children {
-                protocol_primitives::write_path(stream, &sibling.keys).await?;
+                protocol_primitives::write_path(stream, &sibling.calls).await?;
                 protocol_primitives::write_bool(stream, sibling.settled).await?;
                 protocol_primitives::write_bool(stream, sibling.has_snapshot).await?;
             }
@@ -688,7 +688,7 @@ fn sibling_groups_fit(groups: &[SiblingGroup]) -> bool {
                 && group
                     .children
                     .iter()
-                    .all(|sibling| fits_u16(sibling.keys.len()))
+                    .all(|sibling| fits_u16(sibling.calls.len()))
                 && u32::try_from(group.pairs.len()).is_ok()
         })
 }
@@ -704,7 +704,7 @@ mod tests {
             parent_path: Vec::new(),
             children: (0..siblings)
                 .map(|_| Sibling {
-                    keys: vec!["a".into()],
+                    calls: vec!["a".into()],
                     settled: false,
                     has_snapshot: false,
                 })
