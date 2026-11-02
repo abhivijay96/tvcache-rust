@@ -31,6 +31,10 @@ impl Node {
     }
 
     pub fn update_size_in_bytes(&mut self, path_entry_size_in_bytes: u32) {
+        self.size_in_bytes = self.computed_size_in_bytes(path_entry_size_in_bytes);
+    }
+
+    pub fn computed_size_in_bytes(&self, path_entry_size_in_bytes: u32) -> u32 {
         let value_size_in_bytes = self.value.as_ref().map_or(0, |value| value.len() as u32);
 
         let sandbox_id_size_in_bytes = self
@@ -38,7 +42,7 @@ impl Node {
             .as_ref()
             .map_or(0, |sandbox_id| sandbox_id.len() as u32);
 
-        self.size_in_bytes = path_entry_size_in_bytes
+        path_entry_size_in_bytes
             + value_size_in_bytes
             + sandbox_id_size_in_bytes
             + size_of_val(&self.runtime) as u32
@@ -46,6 +50,6 @@ impl Node {
             + size_of_val(&self.ttl) as u32
             + size_of_val(&self.inserted_at_seconds) as u32
             + size_of_val(&self.number_of_cache_hits) as u32
-            + size_of_val(&self.number_of_lpm_hits) as u32;
+            + size_of_val(&self.number_of_lpm_hits) as u32
     }
 }

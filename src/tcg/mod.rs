@@ -1,3 +1,4 @@
+pub mod invariants;
 pub mod node;
 pub mod tool_call_graph;
 
