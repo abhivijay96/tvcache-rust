@@ -50,13 +50,9 @@ impl ToolCallGraph {
     ) -> bool {
         let mut merged = Merged::default();
         let (size_before, size_after) = {
-            let mut parent = &mut self.root;
-            for call in parent_path {
-                let Some(child) = parent.child_mut(call) else {
-                    return false;
-                };
-                parent = child;
-            }
+            let Some(parent) = node_at_mut(&mut self.root, parent_path) else {
+                return false;
+            };
             let distinct = parent
                 .child(survivor_call)
                 .is_some_and(|survivor| !survivor.tool_calls.contains_key(absorbed_call));
@@ -80,6 +76,56 @@ impl ToolCallGraph {
         self.add_reclaimable_sandboxes(&merged.reclaimable_sandboxes);
         true
     }
+
+    /// Merges each class of siblings into its first remaining member, then settles the
+    /// children named in settled. Returns the number of merged classes and of calls
+    /// that no longer find a child.
+    pub fn apply_contraction(
+        &mut self,
+        parent_path: &[String],
+        classes: &[Vec<String>],
+        settled: &[String],
+    ) -> (u32, u32) {
+        if node_at_mut(&mut self.root, parent_path).is_none() {
+            return (0, classes.iter().map(|class| class.len() as u32).sum());
+        }
+        let (mut merged_classes, mut skipped_calls) = (0, 0);
+        for class in classes {
+            let mut survivor: Option<&String> = None;
+            let mut merged_any = false;
+            for call in class {
+                let parent = node_at_mut(&mut self.root, parent_path);
+                if !parent.is_some_and(|parent| parent.child(call).is_some()) {
+                    skipped_calls += 1;
+                    continue;
+                }
+                match survivor {
+                    None => survivor = Some(call),
+                    Some(survivor) => {
+                        merged_any |= self.merge_siblings(parent_path, survivor, call)
+                    }
+                }
+            }
+            merged_classes += merged_any as u32;
+        }
+
+        if let Some(parent) = node_at_mut(&mut self.root, parent_path) {
+            for call in settled {
+                if let Some(child) = parent.child_mut(call) {
+                    child.settled = true;
+                }
+            }
+        }
+        (merged_classes, skipped_calls)
+    }
+}
+
+fn node_at_mut<'a>(root: &'a mut Node, path: &[String]) -> Option<&'a mut Node> {
+    let mut node = root;
+    for call in path {
+        node = node.child_mut(call)?;
+    }
+    Some(node)
 }
 
 fn subtree_size(node: &Node) -> u64 {
@@ -338,6 +384,29 @@ mod tests {
         assert_eq!(score(&a, &node(&[Some(vec![f32::INFINITY, 0.0])])), None);
     }
 
+    fn path(calls: &[&str]) -> Vec<String> {
+        calls.iter().map(|call| call.to_string()).collect()
+    }
+
+    /// Checks every graph counter and node size against a fresh recount.
+    fn assert_counters(graph: &ToolCallGraph) {
+        let (mut nodes, mut sandboxes, mut size) = (0, 0, 0);
+        for child in &graph.root.children {
+            child.walk_subtcg((), &mut |_, node| {
+                let mut fresh = node.clone();
+                fresh.update_size_in_bytes();
+                assert_eq!(node.size_in_bytes, fresh.size_in_bytes);
+                (nodes, size) = (nodes + 1, size + node.size_in_bytes as u64);
+                sandboxes += node.sandbox_id.is_some() as u32;
+            });
+        }
+        assert_eq!(
+            (graph.number_of_nodes, graph.number_of_sandboxes),
+            (nodes, sandboxes)
+        );
+        assert_eq!(graph.size_in_bytes, size);
+    }
+
     fn insert(graph: &mut ToolCallGraph, path: &[&str], embedding: Option<Vec<f32>>) {
         let path = path.iter().map(|call| call.to_string()).collect();
         graph.insert(path, None, None, 1, None, false, embedding);
@@ -570,12 +639,6 @@ mod tests {
 
     #[test]
     fn merge_siblings_keeps_graph_counters_consistent() {
-        let path = |calls: &[&str]| {
-            calls
-                .iter()
-                .map(|call| call.to_string())
-                .collect::<Vec<_>>()
-        };
         let mut graph = ToolCallGraph::new();
         for (calls, sandbox_id) in [
             (&["p"][..], None),
@@ -597,23 +660,6 @@ mod tests {
                 None,
             );
         }
-        let assert_counters = |graph: &ToolCallGraph| {
-            let (mut nodes, mut sandboxes, mut size) = (0, 0, 0);
-            for child in &graph.root.children {
-                child.walk_subtcg((), &mut |_, node| {
-                    let mut fresh = node.clone();
-                    fresh.update_size_in_bytes();
-                    assert_eq!(node.size_in_bytes, fresh.size_in_bytes);
-                    (nodes, size) = (nodes + 1, size + node.size_in_bytes as u64);
-                    sandboxes += node.sandbox_id.is_some() as u32;
-                });
-            }
-            assert_eq!(
-                (graph.number_of_nodes, graph.number_of_sandboxes),
-                (nodes, sandboxes)
-            );
-            assert_eq!(graph.size_in_bytes, size);
-        };
         assert_counters(&graph);
         graph.lease_sandbox(&path(&["p", "b"]));
 
@@ -656,6 +702,71 @@ mod tests {
             assert!(!graph.merge_siblings(&path(parent), survivor, absorbed));
         }
         assert_eq!(counters(&graph), before);
+        assert_counters(&graph);
+    }
+
+    #[test]
+    fn apply_contraction_merges_classes_and_settles_members() {
+        let mut graph = ToolCallGraph::new();
+        for calls in [
+            &["p"][..],
+            &["p", "a"],
+            &["p", "b"],
+            &["p", "c"],
+            &["p", "d"],
+            &["p", "e"],
+            &["p", "a", "x"],
+            &["p", "b", "x"],
+        ] {
+            graph.insert(path(calls), None, None, 1, None, false, None);
+        }
+        graph
+            .root
+            .child_mut("p")
+            .unwrap()
+            .child_mut("c")
+            .unwrap()
+            .settled = true;
+
+        // The evicted member is skipped, and a blue survivor without settlement turns red.
+        let classes = [path(&["missing", "a", "b"]), path(&["c", "d"])];
+        let result = graph.apply_contraction(&path(&["p"]), &classes, &path(&["b", "e"]));
+        assert_eq!((result, graph.number_of_nodes), ((2, 1), 5));
+        assert_counters(&graph);
+        let summary = |graph: &ToolCallGraph| {
+            let parent = graph.root.child("p").unwrap();
+            let children = parent.children.iter().map(|child| {
+                let mut calls: Vec<&str> = child.tool_calls.keys().map(String::as_str).collect();
+                calls.sort();
+                (calls.join("+"), child.settled, child.children.len())
+            });
+            children.collect::<Vec<_>>()
+        };
+        let expected = [("a+b", true, 1), ("c+d", false, 0), ("e", true, 0)];
+        let expected =
+            expected.map(|(calls, settled, children)| (calls.to_string(), settled, children));
+        assert_eq!(summary(&graph), expected);
+
+        // Duplicates and calls already merged are no-ops, and a call in two classes
+        // joins them. A missing settled call is ignored.
+        let classes = [path(&["a", "e", "a", "b"]), path(&["c", "e"])];
+        let result = graph.apply_contraction(&path(&["p"]), &classes, &path(&["missing"]));
+        assert_eq!((result, graph.number_of_nodes), ((2, 0), 3));
+        assert_counters(&graph);
+        let expected = [("a+b+c+d+e".to_string(), false, 1)];
+        assert_eq!(summary(&graph), expected);
+
+        // Calls that reach one child, and a missing parent, change nothing.
+        let classes = [path(&["a", "b"])];
+        assert_eq!(
+            graph.apply_contraction(&path(&["p"]), &classes, &[]),
+            (0, 0)
+        );
+        assert_eq!(
+            graph.apply_contraction(&path(&["q"]), &classes, &path(&["a"])),
+            (0, 2)
+        );
+        assert_eq!(summary(&graph), expected);
         assert_counters(&graph);
     }
 }
