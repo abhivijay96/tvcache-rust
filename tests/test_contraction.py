@@ -7,6 +7,7 @@ next to this one.
 import asyncio
 import itertools
 import json
+import math
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -29,6 +30,9 @@ from tvclient import (
 LIVE: dict[str, dict[str, int]] = {}  # Live sandbox id to its state
 SNAPSHOTS: dict[str, dict[str, int]] = {}  # Snapshot id to its saved state
 PEAK = [0]  # The most sandboxes live at once since the last reset
+ORIGINS: dict[str, str | None] = {}  # Live sandbox id to the snapshot it started from
+COMPARED: list[tuple[dict, dict, bool]] = []  # Each equals call's states and liveness
+FAIL_EQUALS: list[tuple[dict, dict]] = []  # State pairs whose equals raises
 _id_counter = itertools.count()
 
 
@@ -55,7 +59,9 @@ class DictSandbox(Sandbox):
 
     async def start(self) -> None:
         state = {} if self.env_id is None else dict(SNAPSHOTS[self.env_id])
-        self.env_id = f"live-{next(_id_counter)}"
+        live_id = f"live-{next(_id_counter)}"
+        ORIGINS[live_id] = self.env_id
+        self.env_id = live_id
         LIVE[self.env_id] = state
         PEAK[0] = max(PEAK[0], len(LIVE))
 
@@ -70,7 +76,14 @@ class DictSandbox(Sandbox):
         return json.dumps(LIVE[self.env_id], sort_keys=True)
 
     async def equals(self, other: Sandbox) -> bool:
-        return LIVE[self.env_id] == LIVE[other.env_id]
+        both_live = self.env_id in LIVE and other.env_id in LIVE
+        mine, theirs = LIVE.get(self.env_id, {}), LIVE.get(other.env_id, {})
+        COMPARED.append((dict(mine), dict(theirs), both_live))
+        if not both_live:
+            raise RuntimeError("compared a sandbox that isn't live")
+        if (mine, theirs) in FAIL_EQUALS or (theirs, mine) in FAIL_EQUALS:
+            raise RuntimeError(f"failing equals for {mine} and {theirs}")
+        return mine == theirs
 
     async def stop(self) -> None:
         if LIVE.pop(self.env_id, None) is None:
@@ -104,15 +117,32 @@ class StubEmbedder(Embedder):
         return vector
 
 
+class FixedEmbedder(Embedder):
+    """Places each text at a chosen angle in the plane.
+
+    A pair's score is then the cosine of the angle between them.
+    """
+
+    def __init__(self, degrees: dict[str, float]):
+        self.degrees = degrees
+
+    def encode(self, text: str) -> list[float]:
+        angle = math.radians(self.degrees[text])
+        return [math.cos(angle), math.sin(angle)]
+
+
 def calls(*texts: str) -> list[SetCall]:
     """Builds calls from texts like `x 1`."""
     return [SetCall(*text.split()) for text in texts]
 
 
 def reset_workload() -> None:
-    """Checks that no sandbox is live and resets the peak count."""
+    """Checks that no sandbox is live and resets the counts and records."""
     check(not LIVE, f"expected no live sandboxes, got {LIVE}")
     PEAK[0] = 0
+    ORIGINS.clear()
+    COMPARED.clear()
+    FAIL_EQUALS.clear()
 
 
 async def rollout(task_id: str, history: list[SetCall], snapshots: bool = True) -> int:
@@ -135,14 +165,19 @@ async def rollout(task_id: str, history: list[SetCall], snapshots: bool = True) 
     return executor.total_executions
 
 
-async def contract(task_id: str, max_sandboxes: int = 4) -> None:
-    """Runs a contraction job for task_id until it ends on its own."""
+async def contract(*task_ids: str, max_sandboxes: int = 4) -> int:
+    """Runs one contractor's jobs for task_ids until they end on their own.
+
+    Returns the most sandboxes live at once since the last reset_workload.
+    """
     contractor = Contractor(DictSandbox, SetCall, 0.9, max_sandboxes, HOST, PORT)
-    contractor.start(task_id)
-    job, _ = contractor._jobs[task_id]  # Contractor has no public wait
-    done, _ = await asyncio.wait({job}, timeout=30)
-    check(bool(done), f"expected the job for {task_id} to finish")
-    reset_workload()
+    for task_id in task_ids:
+        contractor.start(task_id)
+    jobs = {contractor._jobs[task_id][0] for task_id in task_ids}  # No public wait
+    _, pending = await asyncio.wait(jobs, timeout=30)
+    check(not pending, f"expected the jobs for {task_ids} to finish")
+    check(not LIVE, f"expected no live sandboxes, got {LIVE}")
+    return PEAK[0]
 
 
 def serialized(text: str) -> str:
@@ -259,6 +294,76 @@ async def test_new_embedding_reopens_settled_node(
     check(unequal["settled"], f"expected x 2 still settled, got {unequal}")
 
 
+async def test_replays_without_snapshots(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(StubEmbedder(["x 1", "x 01"]))
+    snapshots_before = set(SNAPSHOTS)
+    for history in ("a 1", "x 1"), ("a 1", "x 01"):
+        await rollout(task_id, calls(*history), snapshots=False)
+    added = set(SNAPSHOTS) - snapshots_before
+    check(not added, f"expected the rollouts to take no snapshots, got {added}")
+    reset_workload()
+    await contract(task_id)
+    fresh = bool(ORIGINS) and set(ORIGINS.values()) == {None}
+    check(fresh, f"expected fresh starts, got {ORIGINS}")
+    states = [state for compared in COMPARED for state in compared[:2]]
+    check(states == [{"a": 1, "x": 1}] * 2, f"expected replayed paths compared, got {COMPARED}")
+    merged = await node_at(client, task_id, "a 1", "x 01")
+    check(serialized("x 1") in merged["tool_calls"], f"expected x 1 and x 01 merged, got {merged}")
+    for texts in ("a 1",), ("a 1", "x 1"):
+        node = await node_at(client, task_id, *texts)
+        check(node["sandbox_id"] is None, f"expected no snapshot at {texts}, got {node}")
+    added = set(SNAPSHOTS) - snapshots_before
+    check(not added, f"expected the contractor to take no snapshots, got {added}")
+
+
+async def test_live_sandboxes_stay_under_cap(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    texts = [f"x {value}" for value in range(1, 7)]
+    set_embedder(StubEmbedder(texts))
+    tasks = [f"{task_id}-{k}" for k in range(4)]
+    for task in tasks:
+        for text in texts:
+            await rollout(task, calls(text))
+    runs = ((4, tasks[:2], None), (12, tasks[2:3], 6), (2, tasks[3:], 2))
+    for cap, contracted, lone_peak in runs:
+        reset_workload()
+        peak = await contract(*contracted, max_sandboxes=cap)
+        check(peak <= cap, f"expected at most {cap} live sandboxes, got {peak}")
+        if lone_peak is not None:
+            check(peak == lone_peak, f"expected a lone job to keep {lone_peak} live, got {peak}")
+        for task in contracted:
+            groups = (await client.list_sibling_groups(task, 1, 0.9))["groups"]
+            check(groups == [], f"expected {task} fully compared, got {groups}")
+
+
+async def test_pinned_sandbox_survives_eviction(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    # Pairs score AB > EF > AC > BC > BD, and no other pair reaches the threshold.
+    # EF outscores AC, but AC goes first because A is already live.
+    degrees = {"x 1": 0, "x 2": 10, "x 3": -12, "x 4": 35, "x 5": 90, "x 6": 101}
+    set_embedder(FixedEmbedder(degrees))
+    for text in degrees:
+        await rollout(task_id, calls(text))
+    a, b, c, d, e, f = ({"x": value} for value in range(1, 7))
+    reset_workload()
+    FAIL_EQUALS.append((a, c))
+    peak = await contract(task_id, max_sandboxes=2)
+    check(peak == 2, f"expected a full two-sandbox pool, got {peak}")
+    # After AB, A has one pair left and B two, so acquiring C would evict A if its pair
+    # didn't pin it.
+    pairs = [(first, second) for first, second, _ in COMPARED]
+    expected = [(a, b), (a, c), (b, c), (b, d), (e, f)]
+    check(pairs == expected, f"expected the ranked order, got {pairs}")
+    check(all(live for _, _, live in COMPARED), f"expected both sides live, got {COMPARED}")
+    for text, settled in zip(degrees, (False, True, False, True, True, True)):
+        node = await node_at(client, task_id, text)
+        check(node["settled"] == settled, f"expected {text} settled={settled}, got {node}")
+
+
 async def run_tests() -> None:
     prefix = f"contraction-{uuid4().hex}"
     async with AsyncPersistentCacheClient(HOST, PORT) as client:
@@ -267,6 +372,9 @@ async def run_tests() -> None:
         await test_unequal_siblings_turn_blue(client, f"{prefix}-unequal")
         await test_shared_children_merge_recursively(client, f"{prefix}-recursive")
         await test_new_embedding_reopens_settled_node(client, f"{prefix}-reopened")
+        await test_replays_without_snapshots(client, f"{prefix}-replay")
+        await test_live_sandboxes_stay_under_cap(client, f"{prefix}-cap")
+        await test_pinned_sandbox_survives_eviction(client, f"{prefix}-pinned")
     print("all contraction tests passed")
 
 
