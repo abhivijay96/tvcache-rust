@@ -8,8 +8,8 @@ import asyncio
 import itertools
 import json
 import sys
-import time
 from pathlib import Path
+from uuid import uuid4
 
 from cache_client import AsyncPersistentCacheClient
 from test_embedding import HOST, PORT, check, get_node
@@ -17,6 +17,7 @@ from test_embedding import HOST, PORT, check, get_node
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tvclient"))
 
 from tvclient import (
+    Contractor,
     Embedder,
     Sandbox,
     ToolCall,
@@ -79,17 +80,21 @@ class DictSandbox(Sandbox):
 class StubEmbedder(Embedder):
     """Gives the texts in each group nearly identical vectors, and others their own.
 
-    Texts are spelled like `x 1`, the same as calls().
+    Texts are spelled like `x 1`, the same as calls(). Encoding a withheld text
+    raises, so the executor inserts its call without an embedding.
     """
 
     DIMENSIONS = 256
 
-    def __init__(self, *groups: list[str]):
+    def __init__(self, *groups: list[str], withheld: tuple[str, ...] = ()):
         self.axes = {text: axis for axis, group in enumerate(groups) for text in group}
         self.offsets = {text: k for group in groups for k, text in enumerate(group)}
         self.next_axis = len(groups)
+        self.withheld = set(withheld)
 
     def encode(self, text: str) -> list[float]:
+        if text in self.withheld:
+            raise RuntimeError(f"withholding the embedding of {text}")
         if text not in self.axes:
             self.axes[text] = self.next_axis
             self.next_axis += 1
@@ -130,13 +135,35 @@ async def rollout(task_id: str, history: list[SetCall], snapshots: bool = True) 
     return executor.total_executions
 
 
+async def contract(task_id: str, max_sandboxes: int = 4) -> None:
+    """Runs a contraction job for task_id until it ends on its own."""
+    contractor = Contractor(DictSandbox, SetCall, 0.9, max_sandboxes, HOST, PORT)
+    contractor.start(task_id)
+    job, _ = contractor._jobs[task_id]  # Contractor has no public wait
+    done, _ = await asyncio.wait({job}, timeout=30)
+    check(bool(done), f"expected the job for {task_id} to finish")
+    reset_workload()
+
+
+def serialized(text: str) -> str:
+    """Returns the serialized call for a text like `x 1`."""
+    return calls(text)[0].serialize()
+
+
+async def node_at(client: AsyncPersistentCacheClient, task_id: str, *texts: str) -> dict:
+    """Returns the node at the path of texts, failing if it's missing."""
+    node = await get_node(client, task_id, [serialized(text) for text in texts])
+    check(node is not None, f"expected a node at {texts}")
+    return node
+
+
 async def test_workload_builds_graph(client: AsyncPersistentCacheClient, task_id: str) -> None:
     set_embedder(StubEmbedder(["x 1", "x 01"]))
     for text in ("x 1", "x 01", "x 2"):
         check(await rollout(task_id, calls(text)) == 1, f"expected {text} executed once")
     reset_workload()
     for text, state in (("x 1", {"x": 1}), ("x 01", {"x": 1}), ("x 2", {"x": 2})):
-        node = await get_node(client, task_id, [calls(text)[0].serialize()])
+        node = await node_at(client, task_id, text)
         check(node["embedding"] is not None, f"expected {text} embedded, got {node}")
         check(node["value"] == json.dumps(state), f"expected {state} for {text}, got {node}")
         snapshot = SNAPSHOTS.get(node["sandbox_id"])
@@ -148,10 +175,98 @@ async def test_workload_builds_graph(client: AsyncPersistentCacheClient, task_id
     check(paired == expected, f"expected x 1 paired with x 01, got {paired}")
 
 
+async def test_equivalent_siblings_merge(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(StubEmbedder(["x 1", "x 01"]))
+    await rollout(task_id, calls("x 1", "y 1"))
+    await rollout(task_id, calls("x 01"))
+    reset_workload()
+    await contract(task_id)
+    merged = await node_at(client, task_id, "x 01")
+    calls_held = sorted(merged["tool_calls"])
+    expected = sorted([serialized("x 1"), serialized("x 01")])
+    check(calls_held == expected, f"expected x 1 and x 01 in one node, got {calls_held}")
+    check(merged["settled"], f"expected the merged node settled, got {merged}")
+    groups = (await client.list_sibling_groups(task_id, 1, 0.9))["groups"]
+    check(groups == [], f"expected nothing left to compare, got {groups}")
+    executed = await rollout(task_id, calls("x 01", "y 1"))
+    check(executed == 0, f"expected the absorbed call to hit the cache, got {executed}")
+
+
+async def test_unequal_siblings_turn_blue(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(StubEmbedder(["x 1", "x 2"]))
+    for text in ("x 1", "x 2"):
+        await rollout(task_id, calls(text))
+    reset_workload()
+    await contract(task_id)
+    for text in ("x 1", "x 2"):
+        node = await node_at(client, task_id, text)
+        check(list(node["tool_calls"]) == [serialized(text)], f"expected {text} alone, got {node}")
+        check(node["settled"], f"expected {text} settled, got {node}")
+    groups = (await client.list_sibling_groups(task_id, 1, 0.9))["groups"]
+    check(groups == [], f"expected nothing left to compare, got {groups}")
+
+
+async def test_shared_children_merge_recursively(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(StubEmbedder(["x 1", "x 01"], ["z 1", "z 01"]))
+    for history in ("x 1", "y 1"), ("x 01", "y 1"), ("x 1", "z 1"), ("x 01", "z 01"):
+        await rollout(task_id, calls(*history))
+    reset_workload()
+    await contract(task_id)
+    parent = await node_at(client, task_id, "x 1")
+    children = sorted(sorted(child["tool_calls"]) for child in parent["children"])
+    expected = sorted([[serialized("y 1")], sorted([serialized("z 1"), serialized("z 01")])])
+    check(children == expected, f"expected one y child and one merged z child, got {children}")
+    merged = await node_at(client, task_id, "x 01", "z 1")
+    check(merged["settled"], f"expected the merged z node settled, got {merged}")
+
+
+async def test_new_embedding_reopens_settled_node(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    # The executor prints one expected warning when the embedding is withheld.
+    # x 2 is similar to x 1, so the first job settles x 1.
+    embedder = StubEmbedder(["x 1", "x 01", "x 2"], withheld=("x 01",))
+    set_embedder(embedder)
+    for text in ("x 1", "x 01", "x 2"):
+        await rollout(task_id, calls(text))
+    reset_workload()
+    await contract(task_id)
+    unembedded = await node_at(client, task_id, "x 01")
+    check(unembedded["embedding"] is None, f"expected x 01 unembedded, got {unembedded}")
+    check(not unembedded["settled"], f"expected the job to skip x 01, got {unembedded}")
+    await client.apply_contraction(task_id, [], [], [serialized("x 01")])
+    for text in ("x 1", "x 01", "x 2"):
+        node = await node_at(client, task_id, text)
+        check(node["settled"], f"expected {text} settled, got {node}")
+
+    embedder.withheld.clear()
+    embedding = embedder.encode("x 01")
+    await client.insert(task_id, [serialized("x 01")], None, None, 0, None, embedding)
+    reopened = await node_at(client, task_id, "x 01")
+    check(not reopened["settled"], f"expected the new embedding to turn it red, got {reopened}")
+    await contract(task_id)
+    merged = await node_at(client, task_id, "x 01")
+    check(serialized("x 1") in merged["tool_calls"], f"expected x 01 merged with x 1, got {merged}")
+    check(merged["settled"], f"expected the merged node settled, got {merged}")
+    unequal = await node_at(client, task_id, "x 2")
+    check(list(unequal["tool_calls"]) == [serialized("x 2")], f"expected x 2 alone, got {unequal}")
+    check(unequal["settled"], f"expected x 2 still settled, got {unequal}")
+
+
 async def run_tests() -> None:
-    prefix = f"contraction-{int(time.time())}"
+    prefix = f"contraction-{uuid4().hex}"
     async with AsyncPersistentCacheClient(HOST, PORT) as client:
         await test_workload_builds_graph(client, f"{prefix}-workload")
+        await test_equivalent_siblings_merge(client, f"{prefix}-equivalent")
+        await test_unequal_siblings_turn_blue(client, f"{prefix}-unequal")
+        await test_shared_children_merge_recursively(client, f"{prefix}-recursive")
+        await test_new_embedding_reopens_settled_node(client, f"{prefix}-reopened")
     print("all contraction tests passed")
 
 
