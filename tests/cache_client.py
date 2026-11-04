@@ -17,6 +17,9 @@ MARK_SANDBOXES_EVICTED_REQUEST = 5
 LIST_SANDBOX_CANDIDATES_REQUEST = 6
 DRAIN_RECLAIMABLE_SANDBOXES_REQUEST = 7
 LIST_HOT_SANDBOXES_REQUEST = 8
+LEASE_SANDBOX_REQUEST = 11
+LIST_SIBLING_GROUPS_REQUEST = 12
+APPLY_CONTRACTION_REQUEST = 13
 
 INSERT_RESULT_RESPONSE = 1
 FIND_RESULT_RESPONSE = 2
@@ -26,6 +29,9 @@ UNREF_SANDBOX_RESULT_RESPONSE = 5
 MARK_SANDBOXES_EVICTED_RESULT_RESPONSE = 6
 SANDBOX_CANDIDATES_RESPONSE = 7
 RECLAIMABLE_SANDBOXES_RESPONSE = 8
+LEASE_RESULT_RESPONSE = 10
+SIBLING_GROUPS_RESPONSE = 11
+CONTRACTION_RESULT_RESPONSE = 12
 
 
 def write_u8(value: int) -> bytes:
@@ -65,6 +71,13 @@ def write_path(path: list[str]) -> bytes:
     return encoded
 
 
+def write_embedding(embedding: list[float]) -> bytes:
+    dimension = len(embedding)
+    if not 1 <= dimension <= 0xFFFF:
+        raise ValueError(f"embedding dimension must be between 1 and 65535, got {dimension}")
+    return struct.pack(f">H{dimension}f", dimension, *embedding)
+
+
 def encode_insert(
     task_id: str,
     path: list[str],
@@ -72,6 +85,7 @@ def encode_insert(
     sandbox_id: str | None,
     runtime: int,
     ttl: int | None = None,
+    embedding: list[float] | None = None,
 ) -> bytes:
     encoded = write_u8(INSERT_REQUEST)
     encoded += write_string_u16(task_id)
@@ -89,6 +103,10 @@ def encode_insert(
     encoded += write_bool(ttl is not None)
     if ttl is not None:
         encoded += write_u32(ttl)
+
+    encoded += write_bool(embedding is not None)
+    if embedding is not None:
+        encoded += write_embedding(embedding)
 
     return encoded
 
@@ -136,6 +154,32 @@ def encode_list_hot_sandboxes(limit: int = 10) -> bytes:
     return write_u8(LIST_HOT_SANDBOXES_REQUEST) + write_u16(limit)
 
 
+def encode_lease_sandbox(task_id: str, path: list[str]) -> bytes:
+    return write_u8(LEASE_SANDBOX_REQUEST) + write_string_u16(task_id) + write_path(path)
+
+
+def encode_list_sibling_groups(task_id: str, depth: int, threshold: float) -> bytes:
+    return (
+        write_u8(LIST_SIBLING_GROUPS_REQUEST)
+        + write_string_u16(task_id)
+        + write_u16(depth)
+        + struct.pack(">f", threshold)
+    )
+
+
+def encode_apply_contraction(
+    task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+) -> bytes:
+    return (
+        write_u8(APPLY_CONTRACTION_REQUEST)
+        + write_string_u16(task_id)
+        + write_path(parent_path)
+        + write_u16(len(classes))
+        + b"".join(write_path(calls) for calls in classes)
+        + write_path(settled)
+    )
+
+
 def read_exact(sock: socket.socket, size: int) -> bytes:
     chunks = bytearray()
     while len(chunks) < size:
@@ -169,6 +213,10 @@ def read_u32(sock: socket.socket) -> int:
 
 def read_u64(sock: socket.socket) -> int:
     return struct.unpack(">Q", read_exact(sock, 8))[0]
+
+
+def read_f32(sock: socket.socket) -> float:
+    return struct.unpack(">f", read_exact(sock, 4))[0]
 
 
 def read_string_u16(sock: socket.socket) -> str:
@@ -214,6 +262,17 @@ def read_sandbox_candidate(sock: socket.socket) -> dict[str, Any]:
 def read_sandbox_candidates(sock: socket.socket) -> list[dict[str, Any]]:
     count = read_u16(sock)
     return [read_sandbox_candidate(sock) for _ in range(count)]
+
+
+def read_sibling_group(sock: socket.socket) -> dict[str, Any]:
+    return {
+        "parent_path": read_path(sock),
+        "children": [
+            {"calls": read_path(sock), "settled": read_bool(sock), "has_snapshot": read_bool(sock)}
+            for _ in range(read_u16(sock))
+        ],
+        "pairs": [(read_u16(sock), read_u16(sock), read_f32(sock)) for _ in range(read_u32(sock))],
+    }
 
 
 def decode_response(sock: socket.socket) -> dict[str, Any]:
@@ -264,6 +323,27 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
             "candidates": read_sandbox_candidates(sock),
         }
 
+    if response_type == LEASE_RESULT_RESPONSE:
+        return {
+            "type": "lease_result",
+            "sandbox_path": read_optional_path(sock),
+            "sandbox_id": read_optional_string_u16(sock),
+        }
+
+    if response_type == SIBLING_GROUPS_RESPONSE:
+        return {
+            "type": "sibling_groups",
+            "deeper_nodes_exist": read_bool(sock),
+            "groups": [read_sibling_group(sock) for _ in range(read_u16(sock))],
+        }
+
+    if response_type == CONTRACTION_RESULT_RESPONSE:
+        return {
+            "type": "contraction_result",
+            "merged_classes": read_u32(sock),
+            "skipped_calls": read_u32(sock),
+        }
+
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
         count = read_u32(sock)
         return {
@@ -278,6 +358,24 @@ def decode_response(sock: socket.socket) -> dict[str, Any]:
         }
 
     raise ValueError(f"unknown response type: {response_type}")
+
+
+def dump_child(node: dict[str, Any], call: str) -> dict[str, Any] | None:
+    """Returns the dumped child whose tool calls include call."""
+    return next((child for child in node["children"] if call in child["tool_calls"]), None)
+
+
+def dump_node(dump: dict[str, Any], task_id: str, path: list[str]) -> dict[str, Any] | None:
+    """Returns the dumped node at path with its last tool call's fields merged in."""
+    graph = dump.get(task_id)
+    if graph is None:
+        return None
+    node = graph["root"]
+    for call in path:
+        node = dump_child(node, call)
+        if node is None:
+            return None
+    return {**node, **node["tool_calls"][path[-1]]} if path else node
 
 
 @dataclass(frozen=True)
@@ -317,8 +415,11 @@ class CacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
+        return self.send_request(
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
+        )
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -340,6 +441,17 @@ class CacheClient:
 
     def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_hot_sandboxes(limit))
+
+    def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return self.send_request(encode_lease_sandbox(task_id, path))
+
+    def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
+        return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
+    def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return self.send_request(encode_apply_contraction(task_id, parent_path, classes, settled))
 
     def dump_all(self) -> object:
         response = self.dump_all_response()
@@ -405,8 +517,11 @@ class PersistentCacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
-        return self.send_request(encode_insert(task_id, path, value, sandbox_id, runtime, ttl))
+        return self.send_request(
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
+        )
 
     def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
         return self.send_request(encode_find(task_id, path))
@@ -428,6 +543,17 @@ class PersistentCacheClient:
 
     def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return self.send_request(encode_list_hot_sandboxes(limit))
+
+    def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return self.send_request(encode_lease_sandbox(task_id, path))
+
+    def list_sibling_groups(self, task_id: str, depth: int, threshold: float) -> dict[str, Any]:
+        return self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
+    def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return self.send_request(encode_apply_contraction(task_id, parent_path, classes, settled))
 
 
 async def async_read_u8(reader: asyncio.StreamReader) -> int:
@@ -453,6 +579,10 @@ async def async_read_u32(reader: asyncio.StreamReader) -> int:
 
 async def async_read_u64(reader: asyncio.StreamReader) -> int:
     return struct.unpack(">Q", await reader.readexactly(8))[0]
+
+
+async def async_read_f32(reader: asyncio.StreamReader) -> float:
+    return struct.unpack(">f", await reader.readexactly(4))[0]
 
 
 async def async_read_string_u16(reader: asyncio.StreamReader) -> str:
@@ -508,6 +638,28 @@ async def async_read_sandbox_candidates(
     return [await async_read_sandbox_candidate(reader) for _ in range(count)]
 
 
+async def async_read_sibling_group(reader: asyncio.StreamReader) -> dict[str, Any]:
+    return {
+        "parent_path": await async_read_path(reader),
+        "children": [
+            {
+                "calls": await async_read_path(reader),
+                "settled": await async_read_bool(reader),
+                "has_snapshot": await async_read_bool(reader),
+            }
+            for _ in range(await async_read_u16(reader))
+        ],
+        "pairs": [
+            (
+                await async_read_u16(reader),
+                await async_read_u16(reader),
+                await async_read_f32(reader),
+            )
+            for _ in range(await async_read_u32(reader))
+        ],
+    }
+
+
 async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
     response_type = await async_read_u8(reader)
 
@@ -554,6 +706,29 @@ async def async_decode_response(reader: asyncio.StreamReader) -> dict[str, Any]:
         return {
             "type": "sandbox_candidates",
             "candidates": await async_read_sandbox_candidates(reader),
+        }
+
+    if response_type == LEASE_RESULT_RESPONSE:
+        return {
+            "type": "lease_result",
+            "sandbox_path": await async_read_optional_path(reader),
+            "sandbox_id": await async_read_optional_string_u16(reader),
+        }
+
+    if response_type == SIBLING_GROUPS_RESPONSE:
+        return {
+            "type": "sibling_groups",
+            "deeper_nodes_exist": await async_read_bool(reader),
+            "groups": [
+                await async_read_sibling_group(reader) for _ in range(await async_read_u16(reader))
+            ],
+        }
+
+    if response_type == CONTRACTION_RESULT_RESPONSE:
+        return {
+            "type": "contraction_result",
+            "merged_classes": await async_read_u32(reader),
+            "skipped_calls": await async_read_u32(reader),
         }
 
     if response_type == RECLAIMABLE_SANDBOXES_RESPONSE:
@@ -634,9 +809,10 @@ class AsyncPersistentCacheClient:
         sandbox_id: str | None,
         runtime: int,
         ttl: int | None = None,
+        embedding: list[float] | None = None,
     ) -> dict[str, Any]:
         return await self.send_request(
-            encode_insert(task_id, path, value, sandbox_id, runtime, ttl)
+            encode_insert(task_id, path, value, sandbox_id, runtime, ttl, embedding)
         )
 
     async def find(self, task_id: str, path: list[str]) -> dict[str, Any]:
@@ -659,3 +835,18 @@ class AsyncPersistentCacheClient:
 
     async def list_hot_sandboxes(self, limit: int = 10) -> dict[str, Any]:
         return await self.send_request(encode_list_hot_sandboxes(limit))
+
+    async def lease_sandbox(self, task_id: str, path: list[str]) -> dict[str, Any]:
+        return await self.send_request(encode_lease_sandbox(task_id, path))
+
+    async def list_sibling_groups(
+        self, task_id: str, depth: int, threshold: float
+    ) -> dict[str, Any]:
+        return await self.send_request(encode_list_sibling_groups(task_id, depth, threshold))
+
+    async def apply_contraction(
+        self, task_id: str, parent_path: list[str], classes: list[list[str]], settled: list[str]
+    ) -> dict[str, Any]:
+        return await self.send_request(
+            encode_apply_contraction(task_id, parent_path, classes, settled)
+        )

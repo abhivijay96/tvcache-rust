@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{tcg::ToolCallGraph, tvcache::TVCache};
+use crate::{
+    tcg::{contraction::SiblingGroup, ToolCallGraph},
+    tvcache::TVCache,
+};
 
 pub type CacheSharedObject = Arc<Mutex<TVCache>>;
 pub type TcgSharedObject = Arc<Mutex<ToolCallGraph>>;
@@ -28,6 +31,7 @@ pub enum Request {
         runtime: u32,
         ttl: Option<u32>,
         ttl_present: bool,
+        embedding: Option<Vec<f32>>,
     },
     Find {
         task_id: String,
@@ -55,6 +59,21 @@ pub enum Request {
     GetForkCost {
         task_id: String,
     },
+    LeaseSandbox {
+        task_id: String,
+        path: Vec<String>,
+    },
+    ListSiblingGroups {
+        task_id: String,
+        depth: u16,
+        threshold: f32,
+    },
+    ApplyContraction {
+        task_id: String,
+        parent_path: Vec<String>,
+        classes: Vec<Vec<String>>,
+        settled: Vec<String>,
+    },
 }
 
 pub enum Response {
@@ -81,6 +100,18 @@ pub enum Response {
     },
     ForkCost {
         fork_cost_ms: u32,
+    },
+    LeaseResult {
+        sandbox_path: Option<Vec<String>>,
+        sandbox_id: Option<String>,
+    },
+    SiblingGroups {
+        deeper_nodes_exist: bool,
+        groups: Vec<SiblingGroup>,
+    },
+    ContractionResult {
+        merged_classes: u32,
+        skipped_calls: u32,
     },
     Error {
         message: String,

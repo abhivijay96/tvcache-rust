@@ -32,6 +32,10 @@
       border-right: 1px solid #cfd8d8;
       background: #fff;
       padding: 20px;
+      position: sticky;
+      top: 0;
+      max-height: 100vh;
+      overflow-y: auto;
     }
 
     main {
@@ -200,6 +204,7 @@
     }
 
     .node-card {
+      cursor: pointer;
       width: 100%;
       height: 100%;
       border: 1.5px solid #111;
@@ -209,6 +214,49 @@
       box-shadow: 0 8px 18px rgba(0, 0, 0, 0.08);
       display: grid;
       grid-template-rows: auto 1fr;
+    }
+
+    .embedding-values {
+      max-height: 240px;
+      overflow-y: auto;
+      border: 1px solid #cfd8d8;
+      border-radius: 4px;
+      background: #fff;
+      padding: 6px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      white-space: pre;
+    }
+
+    .tool-call {
+      display: grid;
+      gap: 8px;
+      border-top: 1px solid #cfd8d8;
+      padding-top: 8px;
+    }
+
+    .node-card.selected {
+      border: 4px solid #111;
+    }
+
+    .node-card.similar {
+      border: 4px solid var(--similarity);
+    }
+
+    .similarity-badge {
+      float: right;
+      margin-left: 8px;
+      padding: 1px 7px;
+      border: 2px solid var(--similarity);
+      border-radius: 10px;
+      background: #fff;
+      color: #111;
+      font-size: 11px;
+    }
+
+    .similarity-legend {
+      font-size: 12px;
+      color: #2d3838;
     }
 
     .node-header {
@@ -265,6 +313,8 @@
       aside {
         border-right: 0;
         border-bottom: 1px solid #cfd8d8;
+        position: static;
+        max-height: none;
       }
 
       #chart {
@@ -300,6 +350,15 @@
           <div class="result-row"><strong>Status</strong><span>Select a task and enter a path JSON array.</span></div>
         </div>
       </form>
+      <section class="tool">
+        <h3>Node</h3>
+        <div class="similarity-legend">
+          <span>A thick black outline marks the selected node. Siblings are outlined by their most similar pair of tool-call embeddings, red (0) to green (1).</span>
+        </div>
+        <div id="nodeDetails" class="find-result">
+          <div class="result-row"><strong>Status</strong><span>Click a node to see its attributes.</span></div>
+        </div>
+      </section>
     </aside>
     <main>
       <div class="topbar">
@@ -316,6 +375,7 @@
     const findForm = document.getElementById("findForm");
     const findPathInput = document.getElementById("findPathInput");
     const findResult = document.getElementById("findResult");
+    const nodeDetails = document.getElementById("nodeDetails");
     const chart = document.getElementById("chart");
     const statusEl = document.getElementById("status");
     const titleEl = document.getElementById("title");
@@ -324,6 +384,14 @@
     const taskCountEl = document.getElementById("taskCount");
 
     let tvcache = {};
+
+    // Red through orange to green, with stops blended in OKLCH so the middle isn't brown.
+    function similarityColor(similarity) {
+      return d3.scaleLinear()
+        .domain([0, 0.25, 0.5, 0.625, 0.75, 0.875, 1])
+        .range(["#9b1c1c", "#bd4517", "#dd6b0f", "#c77b00", "#a68b00", "#799800", "#37a04b"])
+        .clamp(true)(similarity);
+    }
 
     function display(value) {
       if (value === null || value === undefined) {
@@ -335,19 +403,26 @@
       return String(value);
     }
 
-    function toTreeNode(key, node, path) {
-      const childrenMap = node.children || {};
-      const children = Object.entries(childrenMap)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([childKey, childNode]) => toTreeNode(childKey, childNode, path.concat(childKey)));
+    function toTreeNode(node, parentPath) {
+      const toolCalls = node.tool_calls || {};
+      const calls = Object.keys(toolCalls).sort((a, b) => a.localeCompare(b));
+      // Any of a node's calls reaches it, so the first one names it.
+      const entry = calls.length ? toolCalls[calls[0]] : {};
+      const path = calls.length ? parentPath.concat(calls[0]) : parentPath;
+      const children = (node.children || [])
+        .map(child => toTreeNode(child, path))
+        .sort((a, b) => a.call.localeCompare(b.call));
 
       return {
-        key,
+        call: calls[0] ?? "root",
+        calls,
         path,
-        value: node.value ?? null,
+        value: entry.value ?? null,
         sandbox_id: node.sandbox_id ?? null,
-        runtime: node.runtime ?? 0,
+        runtime: entry.runtime ?? 0,
         child_count: children.length,
+        embeddings: calls.map(call => toolCalls[call].embedding).filter(Array.isArray),
+        attributes: node,
         children
       };
     }
@@ -389,10 +464,94 @@
       taskCountEl.textContent = String(taskIds.length);
     }
 
+    function resetNodeDetails() {
+      nodeDetails.innerHTML = `
+        <div class="result-row"><strong>Status</strong><span>Click a node to see its attributes.</span></div>
+      `;
+    }
+
+    function renderNodeDetails(data) {
+      const row = (name, value) =>
+        `<div class="result-row"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(value)}</span></div>`;
+      const embeddingRow = embedding => {
+        if (!Array.isArray(embedding)) {
+          return row("embedding", display(embedding));
+        }
+        const values = embedding.map((value, index) => `${String(index).padStart(3)}: ${value}`).join("\n");
+        return `
+          <div class="result-row">
+            <strong>embedding (${embedding.length} values)</strong>
+            <div class="embedding-values">${escapeHtml(values)}</div>
+          </div>
+        `;
+      };
+      const { children, tool_calls: toolCalls, ...fields } = data.attributes;
+      const rows = [row("path", JSON.stringify(data.path))];
+      for (const [name, value] of Object.entries(fields)) {
+        rows.push(row(name, display(value)));
+      }
+
+      data.calls.forEach((call, index) => {
+        const { embedding, ...entryFields } = toolCalls[call];
+        const entryRows = [row(`tool call ${index + 1} of ${data.calls.length}`, call)];
+        for (const [name, value] of Object.entries(entryFields)) {
+          entryRows.push(row(name, display(value)));
+        }
+        entryRows.push(embeddingRow(embedding));
+        rows.push(`<div class="tool-call">${entryRows.join("")}</div>`);
+      });
+      nodeDetails.innerHTML = rows.join("");
+      nodeDetails.scrollIntoView({ block: "nearest" });
+    }
+
+    function cosineSimilarity(a, b) {
+      let dot = 0, normA = 0, normB = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+      }
+      return dot / Math.sqrt(normA * normB);
+    }
+
+    // Matches the server, which skips mismatched dimensions and zero vectors.
+    function siblingSimilarity(a, b) {
+      let best = null;
+      for (const x of a) {
+        for (const y of b) {
+          const score = x.length === y.length ? cosineSimilarity(x, y) : NaN;
+          if (Number.isFinite(score) && (best === null || score > best)) {
+            best = score;
+          }
+        }
+      }
+      return best;
+    }
+
+    function highlightNode(selected) {
+      d3.select(chart).selectAll(".node-card").each(function (d) {
+        const card = d3.select(this);
+        const sibling = d !== selected && d.parent === selected.parent;
+        const similarity = sibling ? siblingSimilarity(selected.data.embeddings, d.data.embeddings) : null;
+
+        card.classed("selected", d === selected)
+          .classed("similar", similarity !== null)
+          .style("--similarity", similarity !== null ? similarityColor(similarity) : null);
+        card.select(".similarity-badge").remove();
+        if (similarity !== null) {
+          card.select(".node-header")
+            .insert("span", function () { return this.firstChild; })
+            .attr("class", "similarity-badge")
+            .text(similarity.toFixed(2));
+        }
+      });
+    }
+
     function renderSelectedTask() {
       const taskId = selectedTaskId();
       const graph = tvcache[taskId];
       chart.innerHTML = "";
+      resetNodeDetails();
 
       if (!taskId || !graph) {
         titleEl.textContent = "No TCG selected";
@@ -412,7 +571,7 @@
         return;
       }
 
-      const root = d3.hierarchy(toTreeNode("root", graph.root || {}, []));
+      const root = d3.hierarchy(toTreeNode(graph.root || {}, []));
       const nodeWidth = 320;
       const nodeHeight = 220;
       const horizontalGap = 56;
@@ -448,6 +607,8 @@
       svg.call(
         d3.zoom()
           .scaleExtent([0.2, 3])
+          // Lets a slightly shaky click still select a node instead of panning.
+          .clickDistance(4)
           .on("zoom", event => {
             zoomLayer.attr("transform", event.transform);
           })
@@ -473,10 +634,14 @@
         .attr("height", nodeHeight)
         .append("xhtml:div")
         .attr("class", "node-card")
+        .on("click", (event, d) => {
+          renderNodeDetails(d.data);
+          highlightNode(d);
+        })
         .html(d => {
           const data = d.data;
           return `
-          <div class="node-header">${escapeHtml(data.key)}</div>
+          <div class="node-header">${escapeHtml(data.call)}${data.calls.length > 1 ? escapeHtml(` (+${data.calls.length - 1} more)`) : ""}</div>
           <div class="node-body">
             <div class="field"><span>value</span><span>${escapeHtml(display(data.value))}</span></div>
             <div class="field"><span>sandbox</span><span>${escapeHtml(display(data.sandbox_id))}</span></div>
@@ -548,6 +713,7 @@
 
     refreshButton.addEventListener("click", () => {
       loadCache().catch(error => {
+        resetNodeDetails();
         statusEl.textContent = "Error";
         chart.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
       });

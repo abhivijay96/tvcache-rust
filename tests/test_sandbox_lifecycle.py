@@ -3,7 +3,7 @@ import json
 import time
 from typing import Any
 
-from cache_client import AsyncPersistentCacheClient
+from cache_client import AsyncPersistentCacheClient, dump_node
 
 
 HOST = "127.0.0.1"
@@ -23,23 +23,6 @@ async def dump_all(client: AsyncPersistentCacheClient) -> dict[str, Any]:
     if response["type"] != "json":
         raise RuntimeError(f"expected json response, got {response['type']}")
     return json.loads(response["json"])
-
-
-def get_node(cache_dump: dict[str, Any], task_id: str, path: list[str]) -> dict[str, Any] | None:
-    if task_id not in cache_dump:
-        return None
-
-    curr = cache_dump[task_id].get("root")
-    if not isinstance(curr, dict):
-        return None
-
-    for path_entry in path:
-        children = curr.get("children", {})
-        if path_entry not in children:
-            return None
-        curr = children[path_entry]
-
-    return curr
 
 
 async def drain(client: AsyncPersistentCacheClient) -> list[str]:
@@ -108,7 +91,7 @@ async def run_test() -> None:
                 f"expected one reference to {sandbox_id}: {tcg['sandbox_references']}"
             )
 
-        node_before_mark = get_node(cache_dump, task_id, sandbox_path)
+        node_before_mark = dump_node(cache_dump, task_id, sandbox_path)
         assert node_before_mark is not None
         node_size_before_mark = node_before_mark["size_in_bytes"]
         tcg_size_before_mark = tcg["size_in_bytes"]
@@ -140,7 +123,7 @@ async def run_test() -> None:
                 f"expected {sandbox_id} in victim list: {tcg['reclaimable_sandboxes']}"
             )
 
-        node_after_mark = get_node(cache_dump, task_id, sandbox_path)
+        node_after_mark = dump_node(cache_dump, task_id, sandbox_path)
         assert node_after_mark is not None
         if node_after_mark["sandbox_id"] is not None:
             raise AssertionError("expected the node's sandbox_id to be cleared by mark")

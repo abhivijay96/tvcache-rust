@@ -5,6 +5,7 @@ use tracing::error;
 
 use crate::{
     protocol_primitives,
+    tcg::contraction::{class_call_count, SiblingGroup},
     tvcache::tcg_entries_to_json,
     types::{
         CacheSharedObject, ReclaimableSandbox, Request, Response, SandboxCandidate,
@@ -47,6 +48,7 @@ impl RequestHandler {
                 let mut value = None;
                 let mut sandbox_id = None;
                 let mut ttl: Option<u32> = None;
+                let mut embedding = None;
 
                 let runtime = protocol_primitives::read_u32(stream).await?;
 
@@ -84,6 +86,17 @@ impl RequestHandler {
                     ));
                 }
 
+                let embedding_exists = protocol_primitives::read_u8(stream).await?;
+
+                if embedding_exists == 1 {
+                    embedding = Some(protocol_primitives::read_embedding(stream).await?);
+                } else if embedding_exists != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid embedding exists flag: {embedding_exists}"),
+                    ));
+                }
+
                 Ok(Request::Insert {
                     task_id,
                     path,
@@ -92,6 +105,7 @@ impl RequestHandler {
                     runtime,
                     ttl,
                     ttl_present: ttl_exists == 1,
+                    embedding,
                 })
             }
 
@@ -152,6 +166,43 @@ impl RequestHandler {
                 Ok(Request::GetForkCost { task_id })
             }
 
+            11 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let path = protocol_primitives::read_path(stream).await?;
+
+                Ok(Request::LeaseSandbox { task_id, path })
+            }
+
+            12 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let depth = protocol_primitives::read_u16(stream).await?;
+                let threshold = protocol_primitives::read_f32(stream).await?;
+
+                Ok(Request::ListSiblingGroups {
+                    task_id,
+                    depth,
+                    threshold,
+                })
+            }
+
+            13 => {
+                let task_id = protocol_primitives::read_string_u16(stream).await?;
+                let parent_path = protocol_primitives::read_path(stream).await?;
+                let class_count = protocol_primitives::read_u16(stream).await?;
+                let mut classes = Vec::with_capacity(usize::from(class_count));
+                for _ in 0..class_count {
+                    classes.push(protocol_primitives::read_path(stream).await?);
+                }
+                let settled = protocol_primitives::read_path(stream).await?;
+
+                Ok(Request::ApplyContraction {
+                    task_id,
+                    parent_path,
+                    classes,
+                    settled,
+                })
+            }
+
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown request type: {request_type}"),
@@ -169,6 +220,7 @@ impl RequestHandler {
                 runtime,
                 ttl_present,
                 ttl,
+                embedding,
             } => {
                 let tcg = {
                     let mut cache = self.cache.lock().await;
@@ -177,7 +229,7 @@ impl RequestHandler {
 
                 let (value_inserted, sandbox_inserted) = {
                     let mut tcg = tcg.lock().await;
-                    tcg.insert(path, value, sandbox_id, runtime, ttl, ttl_present)
+                    tcg.insert(path, value, sandbox_id, runtime, ttl, ttl_present, embedding)
                 };
 
                 Response::InsertResult {
@@ -356,6 +408,82 @@ impl RequestHandler {
 
                 Response::ForkCost { fork_cost_ms }
             }
+
+            Request::LeaseSandbox { task_id, path } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let (sandbox_path, sandbox_id) = match tcg {
+                    Some(tcg) => {
+                        let mut tcg = tcg.lock().await;
+                        tcg.lease_sandbox(&path)
+                    }
+                    None => (None, None),
+                };
+
+                Response::LeaseResult {
+                    sandbox_path,
+                    sandbox_id,
+                }
+            }
+
+            Request::ListSiblingGroups {
+                task_id,
+                depth,
+                threshold,
+            } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                let (deeper_nodes_exist, groups) = match tcg {
+                    Some(tcg) => {
+                        let tcg = tcg.lock().await;
+                        tcg.sibling_groups(usize::from(depth), threshold)
+                    }
+                    None => (false, Vec::new()),
+                };
+
+                if sibling_groups_fit(&groups) {
+                    Response::SiblingGroups {
+                        deeper_nodes_exist,
+                        groups,
+                    }
+                } else {
+                    Response::Error {
+                        message: "sibling groups exceed protocol limits".to_string(),
+                    }
+                }
+            }
+
+            Request::ApplyContraction {
+                task_id,
+                parent_path,
+                classes,
+                settled,
+            } => {
+                let tcg = {
+                    let cache = self.cache.lock().await;
+                    cache.peek_tcg(&task_id)
+                };
+
+                // An unknown task skips every call, like a missing parent.
+                let (merged_classes, skipped_calls) = match tcg {
+                    Some(tcg) => {
+                        let mut tcg = tcg.lock().await;
+                        tcg.apply_contraction(&parent_path, &classes, &settled)
+                    }
+                    None => (0, class_call_count(&classes)),
+                };
+
+                Response::ContractionResult {
+                    merged_classes,
+                    skipped_calls,
+                }
+            }
         }
     }
 
@@ -388,19 +516,8 @@ impl RequestHandler {
                     protocol_primitives::write_bool(stream, false).await?;
                 }
 
-                if let Some(sandbox_path) = sandbox_path {
-                    protocol_primitives::write_bool(stream, true).await?;
-                    protocol_primitives::write_path(stream, &sandbox_path).await?;
-                } else {
-                    protocol_primitives::write_bool(stream, false).await?;
-                }
-
-                if let Some(sandbox_id) = sandbox_id {
-                    protocol_primitives::write_bool(stream, true).await?;
-                    protocol_primitives::write_string_u16(stream, &sandbox_id).await?;
-                } else {
-                    protocol_primitives::write_bool(stream, false).await?;
-                }
+                self.write_sandbox_location(stream, sandbox_path, sandbox_id)
+                    .await?;
             }
 
             Response::UnrefSandboxResult {
@@ -446,6 +563,33 @@ impl RequestHandler {
                 protocol_primitives::write_u32(stream, fork_cost_ms).await?;
             }
 
+            Response::LeaseResult {
+                sandbox_path,
+                sandbox_id,
+            } => {
+                protocol_primitives::write_u8(stream, 10).await?;
+                self.write_sandbox_location(stream, sandbox_path, sandbox_id)
+                    .await?;
+            }
+
+            Response::SiblingGroups {
+                deeper_nodes_exist,
+                groups,
+            } => {
+                protocol_primitives::write_u8(stream, 11).await?;
+                protocol_primitives::write_bool(stream, deeper_nodes_exist).await?;
+                self.write_sibling_groups(stream, &groups).await?;
+            }
+
+            Response::ContractionResult {
+                merged_classes,
+                skipped_calls,
+            } => {
+                protocol_primitives::write_u8(stream, 12).await?;
+                protocol_primitives::write_u32(stream, merged_classes).await?;
+                protocol_primitives::write_u32(stream, skipped_calls).await?;
+            }
+
             Response::Error { message } => {
                 protocol_primitives::write_u8(stream, 3).await?;
                 protocol_primitives::write_string_u32(stream, &message).await?;
@@ -485,6 +629,59 @@ impl RequestHandler {
         candidates.truncate(limit);
 
         candidates
+    }
+
+    async fn write_sandbox_location(
+        &self,
+        stream: &mut TcpStream,
+        sandbox_path: Option<Vec<String>>,
+        sandbox_id: Option<String>,
+    ) -> Result<(), io::Error> {
+        if let Some(sandbox_path) = sandbox_path {
+            protocol_primitives::write_bool(stream, true).await?;
+            protocol_primitives::write_path(stream, &sandbox_path).await?;
+        } else {
+            protocol_primitives::write_bool(stream, false).await?;
+        }
+
+        if let Some(sandbox_id) = sandbox_id {
+            protocol_primitives::write_bool(stream, true).await?;
+            protocol_primitives::write_string_u16(stream, &sandbox_id).await?;
+        } else {
+            protocol_primitives::write_bool(stream, false).await?;
+        }
+
+        Ok(())
+    }
+
+    // Counts and indexes were checked by sibling_groups_fit.
+    async fn write_sibling_groups(
+        &self,
+        stream: &mut TcpStream,
+        groups: &[SiblingGroup],
+    ) -> Result<(), io::Error> {
+        protocol_primitives::write_u16(stream, groups.len() as u16).await?;
+
+        for group in groups {
+            protocol_primitives::write_path(stream, &group.parent_path).await?;
+            protocol_primitives::write_u16(stream, group.children.len() as u16).await?;
+
+            for sibling in &group.children {
+                protocol_primitives::write_path(stream, &sibling.calls).await?;
+                protocol_primitives::write_bool(stream, sibling.settled).await?;
+                protocol_primitives::write_bool(stream, sibling.has_snapshot).await?;
+            }
+
+            protocol_primitives::write_u32(stream, group.pairs.len() as u32).await?;
+
+            for &(i, j, score) in &group.pairs {
+                protocol_primitives::write_u16(stream, i as u16).await?;
+                protocol_primitives::write_u16(stream, j as u16).await?;
+                protocol_primitives::write_f32(stream, score).await?;
+            }
+        }
+
+        Ok(())
     }
 
     async fn read_sandbox_eviction_records(
@@ -531,5 +728,44 @@ impl RequestHandler {
         }
 
         Ok(())
+    }
+}
+
+/// Returns whether every count and index fits its protocol field.
+fn sibling_groups_fit(groups: &[SiblingGroup]) -> bool {
+    let fits_u16 = |count: usize| u16::try_from(count).is_ok();
+    fits_u16(groups.len())
+        && groups.iter().all(|group| {
+            fits_u16(group.parent_path.len())
+                && fits_u16(group.children.len())
+                && group
+                    .children
+                    .iter()
+                    .all(|sibling| fits_u16(sibling.calls.len()))
+                && u32::try_from(group.pairs.len()).is_ok()
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tcg::contraction::Sibling;
+
+    #[test]
+    fn sibling_groups_fit_checks_protocol_limits() {
+        let group = |siblings: usize| SiblingGroup {
+            parent_path: Vec::new(),
+            children: (0..siblings)
+                .map(|_| Sibling {
+                    calls: vec!["a".into()],
+                    settled: false,
+                    has_snapshot: false,
+                })
+                .collect(),
+            pairs: vec![(0, 1, 1.0)],
+        };
+        let limit = usize::from(u16::MAX);
+        assert!(sibling_groups_fit(&[group(limit)]));
+        assert!(!sibling_groups_fit(&[group(limit + 1)]));
     }
 }

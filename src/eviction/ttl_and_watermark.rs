@@ -28,7 +28,7 @@ fn get_stats_of_removed_node(node: &Node) -> EvictionResult {
 
     // Node will not be none because it is not optional, if there is a key, there is a node
 
-    for (_, child) in node.children.iter() {
+    for (_, child) in node.iter_children() {
         let child_count = get_stats_of_removed_node(child);
         result.update(child_count);
     }
@@ -42,7 +42,7 @@ fn has_node_expired(node: &Node) -> bool {
 }
 
 fn prune_expired_recursive(node: &mut Node, eviction_result: &mut EvictionResult) {
-    node.children.retain(|_, child| {
+    node.retain_children(|child| {
         if has_node_expired(child) {
             let eviction_result_child = get_stats_of_removed_node(child);
 
@@ -79,7 +79,7 @@ fn populate_tcg_eviction_candidates(
 ) {
     let mut children = Vec::<(&String, &Node)>::new();
 
-    for (node_key, child) in node.children.iter() {
+    for (node_key, child) in node.iter_children() {
         children.push((node_key, child));
     }
 
@@ -103,7 +103,7 @@ fn find_parent_node_mut<'a>(root: &'a mut Node, parent_path: &[String]) -> Optio
     let mut curr = root;
 
     for path_entry in parent_path {
-        curr = curr.children.get_mut(path_entry)?;
+        curr = curr.child_mut(path_entry)?;
     }
 
     Some(curr)
@@ -144,7 +144,7 @@ async fn prune_cache_to_fit(
             continue;
         };
 
-        let Some(removed_node) = parent_node.children.remove(&candidate.child_key) else {
+        let Some(removed_node) = parent_node.remove_child(&candidate.child_key) else {
             continue;
         };
 

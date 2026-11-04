@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from cache_client import AsyncPersistentCacheClient
+from cache_client import AsyncPersistentCacheClient, dump_node
 
 
 HOST = "127.0.0.1"
@@ -43,8 +43,7 @@ def make_payload(task_idx: int, node_idx: int) -> str:
 
 
 def count_nodes(node: dict[str, Any]) -> int:
-    children = node.get("children", {})
-    return 1 + sum(count_nodes(child) for child in children.values())
+    return 1 + sum(count_nodes(child) for child in node.get("children", []))
 
 
 def prefixed_tcgs(cache_dump: object, task_prefix: str) -> dict[str, dict[str, Any]]:
@@ -72,23 +71,6 @@ def task_node_count(cache_dump: object, task_id: str) -> int:
         return 0
 
     return max(0, count_nodes(root) - 1)
-
-
-def get_node(cache_dump: object, task_id: str, path: list[str]) -> dict[str, Any] | None:
-    if not isinstance(cache_dump, dict) or task_id not in cache_dump:
-        return None
-
-    curr = cache_dump[task_id].get("root")
-    if not isinstance(curr, dict):
-        return None
-
-    for path_entry in path:
-        children = curr.get("children", {})
-        if path_entry not in children:
-            return None
-        curr = children[path_entry]
-
-    return curr
 
 
 def prefixed_node_count(cache_dump: object, task_prefix: str) -> int:
@@ -237,7 +219,7 @@ async def verify_hot_cache_hits_after_eviction(
             continue
 
         for node_idx, node in enumerate(task.nodes):
-            before_node = get_node(after_dump, task.task_id, node.path)
+            before_node = dump_node(after_dump, task.task_id, node.path)
             if before_node is None:
                 raise AssertionError(
                     f"expected hot path to survive eviction: "
@@ -260,7 +242,7 @@ async def verify_hot_cache_hits_after_eviction(
                 )
 
             latest_dump = await dump_all(client)
-            after_node = get_node(latest_dump, task.task_id, node.path)
+            after_node = dump_node(latest_dump, task.task_id, node.path)
             if after_node is None:
                 raise AssertionError(
                     f"hot path disappeared after post-eviction find: "

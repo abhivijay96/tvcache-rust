@@ -83,7 +83,7 @@ is the reference encoder/decoder.
 
 | Tag | Request | Purpose |
 | --- | --- | --- |
-| 1 | `Insert` | Store a value and/or sandbox snapshot at a path. |
+| 1 | `Insert` | Store a value, sandbox snapshot and/or tool-call embedding at a path. |
 | 2 | `Find` | LPM lookup; leases the returned sandbox (refcount++). |
 | 3 | `DumpAll` | JSON dump of every TCG (debug). |
 | 4 | `UnrefSandbox` | Release a leased sandbox (refcount--). |

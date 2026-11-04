@@ -23,6 +23,12 @@ pub async fn read_u32(stream: &mut TcpStream) -> Result<u32, io::Error> {
     Ok(u32::from_be_bytes(buffer))
 }
 
+pub async fn read_f32(stream: &mut TcpStream) -> Result<f32, io::Error> {
+    let mut buffer = [0; 4];
+    stream.read_exact(&mut buffer).await?;
+    Ok(f32::from_be_bytes(buffer))
+}
+
 pub async fn read_string_u16(stream: &mut TcpStream) -> Result<String, io::Error> {
     let len = read_u16(stream).await? as usize;
     read_string_bytes(stream, len).await
@@ -51,6 +57,28 @@ pub async fn read_path(stream: &mut TcpStream) -> Result<Vec<String>, io::Error>
     Ok(path)
 }
 
+pub async fn read_embedding(stream: &mut TcpStream) -> Result<Vec<f32>, io::Error> {
+    let dimension = read_u16(stream).await? as usize;
+
+    if dimension == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "embedding dimension must be positive",
+        ));
+    }
+
+    // One read for the whole vector instead of one per float.
+    let mut buffer = vec![0; dimension * size_of::<f32>()];
+    stream.read_exact(&mut buffer).await?;
+
+    Ok(buffer
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_be_bytes(*bytes))
+        .collect())
+}
+
 pub async fn write_u8(stream: &mut TcpStream, value: u8) -> Result<(), io::Error> {
     stream.write_all(&[value]).await
 }
@@ -64,6 +92,10 @@ pub async fn write_u16(stream: &mut TcpStream, value: u16) -> Result<(), io::Err
 }
 
 pub async fn write_u32(stream: &mut TcpStream, value: u32) -> Result<(), io::Error> {
+    stream.write_all(&value.to_be_bytes()).await
+}
+
+pub async fn write_f32(stream: &mut TcpStream, value: f32) -> Result<(), io::Error> {
     stream.write_all(&value.to_be_bytes()).await
 }
 
