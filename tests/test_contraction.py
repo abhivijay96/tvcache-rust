@@ -33,6 +33,11 @@ PEAK = [0]  # The most sandboxes live at once since the last reset
 ORIGINS: dict[str, str | None] = {}  # Live sandbox id to the snapshot it started from
 COMPARED: list[tuple[dict, dict, bool]] = []  # Each equals call's states and liveness
 FAIL_EQUALS: list[tuple[dict, dict]] = []  # State pairs whose equals raises
+FAIL_RESTORES: set[str] = set()  # Snapshot ids whose restore raises
+FAILED_RESTORES: list[str] = []  # Each restore that raised
+GATED = [False]  # Whether equals waits for GATE
+GATE = asyncio.Event()  # Set to let held equals calls return
+IN_EQUALS = asyncio.Event()  # Set once an equals call is held
 _id_counter = itertools.count()
 
 
@@ -58,6 +63,9 @@ class DictSandbox(Sandbox):
     """A sandbox whose state is a dict, restored into a fresh live id."""
 
     async def start(self) -> None:
+        if self.env_id in FAIL_RESTORES:
+            FAILED_RESTORES.append(self.env_id)
+            raise RuntimeError(f"failing the restore of {self.env_id}")
         state = {} if self.env_id is None else dict(SNAPSHOTS[self.env_id])
         live_id = f"live-{next(_id_counter)}"
         ORIGINS[live_id] = self.env_id
@@ -83,6 +91,9 @@ class DictSandbox(Sandbox):
             raise RuntimeError("compared a sandbox that isn't live")
         if (mine, theirs) in FAIL_EQUALS or (theirs, mine) in FAIL_EQUALS:
             raise RuntimeError(f"failing equals for {mine} and {theirs}")
+        if GATED[0]:
+            IN_EQUALS.set()
+            await GATE.wait()
         return mine == theirs
 
     async def stop(self) -> None:
@@ -143,6 +154,11 @@ def reset_workload() -> None:
     ORIGINS.clear()
     COMPARED.clear()
     FAIL_EQUALS.clear()
+    FAIL_RESTORES.clear()
+    FAILED_RESTORES.clear()
+    GATED[0] = False
+    GATE.clear()
+    IN_EQUALS.clear()
 
 
 async def rollout(task_id: str, history: list[SetCall], snapshots: bool = True) -> int:
@@ -364,6 +380,120 @@ async def test_pinned_sandbox_survives_eviction(
         check(node["settled"] == settled, f"expected {text} settled={settled}, got {node}")
 
 
+async def stop_mid_comparison(task_id: str) -> None:
+    """Starts a job, stops it during its first gated equals, and checks stop waits."""
+    GATE.clear()
+    IN_EQUALS.clear()
+    GATED[0] = True
+    contractor = Contractor(DictSandbox, SetCall, 0.9, 4, HOST, PORT)
+    contractor.start(task_id)
+    await asyncio.wait_for(IN_EQUALS.wait(), timeout=30)
+    stopping = asyncio.create_task(contractor.stop(task_id))
+    await asyncio.sleep(0.1)
+    check(not stopping.done(), "expected stop to wait for the comparison in progress")
+    GATED[0] = False
+    GATE.set()
+    await asyncio.wait_for(stopping, timeout=30)
+    check(not LIVE, f"expected stop to return after cleanup, got {LIVE}")
+
+
+async def test_failed_restore_releases_pins(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    # Only AB and CD qualify, and B can't be restored. CD must then evict A, which a
+    # pin leaked from AB would block.
+    degrees = {"x 1": 0, "x 2": 5, "x 3": 90, "x 4": 96}
+    set_embedder(FixedEmbedder(degrees))
+    for text in degrees:
+        await rollout(task_id, calls(text))
+    c, d = {"x": 3}, {"x": 4}
+    snapshot_a = (await node_at(client, task_id, "x 1"))["sandbox_id"]
+    snapshot_b = (await node_at(client, task_id, "x 2"))["sandbox_id"]
+    reset_workload()
+    FAIL_RESTORES.add(snapshot_b)
+    await contract(task_id, max_sandboxes=2)
+    failed = FAILED_RESTORES
+    check(failed == [snapshot_b], f"expected B's restore to fail once, got {failed}")
+    check(snapshot_a in ORIGINS.values(), f"expected A restored before B failed, got {ORIGINS}")
+    pairs = [(first, second) for first, second, _ in COMPARED]
+    check(pairs == [(c, d)], f"expected CD compared, got {pairs}")
+
+
+async def test_stop_applies_partial_result(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(FixedEmbedder({"x 1": 0, "x 01": 3, "x 2": 10}))
+    for text in ("x 1", "x 01", "x 2"):
+        await rollout(task_id, calls(text))
+    reset_workload()
+    await stop_mid_comparison(task_id)
+    check(len(COMPARED) == 1, f"expected only the first pair compared, got {COMPARED}")
+    merged = await node_at(client, task_id, "x 01")
+    expected = sorted([serialized("x 1"), serialized("x 01")])
+    check(sorted(merged["tool_calls"]) == expected, f"expected x 1 and x 01 merged, got {merged}")
+    check(not merged["settled"], f"expected the merged node red, got {merged}")
+    unmerged = await node_at(client, task_id, "x 2")
+    alone = list(unmerged["tool_calls"]) == [serialized("x 2")]
+    check(alone and not unmerged["settled"], f"expected x 2 alone and red, got {unmerged}")
+    reset_workload()
+    await contract(task_id)
+    for text in ("x 1", "x 2"):
+        node = await node_at(client, task_id, text)
+        check(node["settled"], f"expected {text} settled by a later window, got {node}")
+
+
+async def test_stopped_class_stays_red_until_decided(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    # A is x 1, B is x 01 and C is x 2. AB and BC qualify, AC falls below the
+    # threshold, and C starts blue.
+    set_embedder(FixedEmbedder({"x 1": 0, "x 01": 12, "x 2": 26}))
+    for text in ("x 1", "x 01", "x 2"):
+        await rollout(task_id, calls(text))
+    await client.apply_contraction(task_id, [], [], [serialized("x 2")])
+    c = await node_at(client, task_id, "x 2")
+    check(c["settled"], f"expected C blue before the window, got {c}")
+    reset_workload()
+    await stop_mid_comparison(task_id)
+    merged = await node_at(client, task_id, "x 01")
+    check(serialized("x 1") in merged["tool_calls"], f"expected A and B merged, got {merged}")
+    check(not merged["settled"], f"expected the merged node red after the stop, got {merged}")
+    c = await node_at(client, task_id, "x 2")
+    alone = list(c["tool_calls"]) == [serialized("x 2")]
+    check(alone and c["settled"], f"expected C alone and still blue, got {c}")
+    groups = (await client.list_sibling_groups(task_id, 1, 0.9))["groups"]
+    one_pair = len(groups) == 1 and len(groups[0]["pairs"]) == 1
+    check(one_pair, f"expected the merged node and C offered, got {groups}")
+    reset_workload()
+    await contract(task_id)
+    merged = await node_at(client, task_id, "x 01")
+    check(merged["settled"], f"expected the merged node blue once decided, got {merged}")
+
+
+async def test_failing_pair_tried_once_per_window(
+    client: AsyncPersistentCacheClient, task_id: str
+) -> None:
+    set_embedder(StubEmbedder(["x 1", "x 2", "x 3"]))
+    for text in ("x 1", "x 2", "x 3"):
+        await rollout(task_id, calls(text))
+    a, b, c = ({"x": value} for value in range(1, 4))
+    for _ in range(2):
+        reset_workload()
+        FAIL_EQUALS.append((a, b))
+        await contract(task_id)
+        pairs = sorted(sorted((first["x"], second["x"])) for first, second, _ in COMPARED)
+        # A and B stay red, so every pair qualifies again in the second window.
+        check(pairs == [[1, 2], [1, 3], [2, 3]], f"expected each pair once, got {pairs}")
+        for text, settled in (("x 1", False), ("x 2", False), ("x 3", True)):
+            node = await node_at(client, task_id, text)
+            check(node["settled"] == settled, f"expected {text} settled={settled}, got {node}")
+    reset_workload()
+    await contract(task_id)
+    for text in ("x 1", "x 2", "x 3"):
+        node = await node_at(client, task_id, text)
+        check(node["settled"], f"expected {text} settled once decided, got {node}")
+
+
 async def run_tests() -> None:
     prefix = f"contraction-{uuid4().hex}"
     async with AsyncPersistentCacheClient(HOST, PORT) as client:
@@ -375,6 +505,10 @@ async def run_tests() -> None:
         await test_replays_without_snapshots(client, f"{prefix}-replay")
         await test_live_sandboxes_stay_under_cap(client, f"{prefix}-cap")
         await test_pinned_sandbox_survives_eviction(client, f"{prefix}-pinned")
+        await test_failed_restore_releases_pins(client, f"{prefix}-restore")
+        await test_stop_applies_partial_result(client, f"{prefix}-stop")
+        await test_stopped_class_stays_red_until_decided(client, f"{prefix}-stopped")
+        await test_failing_pair_tried_once_per_window(client, f"{prefix}-failing")
     print("all contraction tests passed")
 
 
