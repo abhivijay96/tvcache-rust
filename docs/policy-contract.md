@@ -1,5 +1,24 @@
 # Policy contract (starting API)
 
+## Example implementation: FIFO
+
+`src/policy/fifo.rs` provides `FifoPolicy`, a small reference implementation:
+
+```rust
+use tvcache::policy::{fifo::FifoPolicy, CachePolicy};
+let policy: Box<dyn CachePolicy> = Box::new(FifoPolicy::default());
+assert_eq!(policy.name(), "fifo");
+```
+
+It admits candidates whose charge fits each total budget (eviction may still be
+needed), and selects the oldest inserted root among the supplied legal actions.
+Hits do not refresh age. Removal callbacks clear state, and reinsertion puts an
+entry at the back of the queue. For a subtree action, the root determines age;
+notify removal for all affected descendants. Untracked roots are skipped. This
+example prioritizes clarity over performance. The separate [replay runner](replay.md)
+exercises it against the original enforcer; production server dispatch is unchanged.
+Run `cargo test policy::fifo` for its tests.
+
 `src/policy/mod.rs` exports `CachePolicy` through the `tvcache` library. Implement
 this trait for LRU, LFU, TCG heuristics, or a predictor; select implementations
 with `Box<dyn CachePolicy>`. No model runtime is required by the interface.

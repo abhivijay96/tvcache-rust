@@ -1,4 +1,5 @@
 //! Storage-independent contracts. See docs/policy-contract.md for lifecycle rules.
+pub mod fifo;
 pub mod synthetic;
 
 use serde::{Deserialize, Serialize};
