@@ -1,0 +1,53 @@
+{
+  "command": [
+    "target/debug/replay",
+    "data/synthetic/balanced",
+    "both",
+    "1"
+  ],
+  "dataset": "balanced",
+  "synthetic": true,
+  "input_sha256": {
+    "events.jsonl": "eb78438ff11a48575027d641bd4a6ae0b2f7e4c3e46e998ed23ff56a769d5cbc",
+    "nodes.jsonl": "0184c35e2b24677b3d606f9b198b6519df22abe3c6471c7b4d110471c8bae58f",
+    "summary.json": "beeee70548e0543370e91464600f501d6d969cb8fb6fac1f575ff3a43cc5608f"
+  },
+  "reports": [
+    {
+      "policy": "original-ttl-and-watermark",
+      "mode": "result-only; no TTL/snapshots; trace entry sizes; post-insert enforcement each event",
+      "capacity_bytes": 1048576,
+      "requests": 9613,
+      "hits": 5394,
+      "misses": 4219,
+      "hit_rate": 0.5611151565588266,
+      "gross_tool_ms_saved": 2733789.177140725,
+      "gross_tool_cost_usd_saved": 4.145682589999962,
+      "evicted_entries": 2023,
+      "bypassed_oversized": 0,
+      "bypassed_missing_parent": 2139,
+      "bypassed_by_policy": 0,
+      "peak_bytes_before_enforcement": 1307401,
+      "peak_bytes_after_enforcement": 1048517,
+      "final_bytes": 1038220
+    },
+    {
+      "policy": "fifo",
+      "mode": "result-only; no TTL/snapshots; trace entry sizes; post-insert enforcement each event",
+      "capacity_bytes": 1048576,
+      "requests": 9613,
+      "hits": 3775,
+      "misses": 5838,
+      "hit_rate": 0.3926973889524602,
+      "gross_tool_ms_saved": 2316462.8646733155,
+      "gross_tool_cost_usd_saved": 2.88738821,
+      "evicted_entries": 5737,
+      "bypassed_oversized": 0,
+      "bypassed_missing_parent": 51,
+      "bypassed_by_policy": 0,
+      "peak_bytes_before_enforcement": 1281941,
+      "peak_bytes_after_enforcement": 1048549,
+      "final_bytes": 517654
+    }
+  ]
+}

@@ -1,5 +1,10 @@
 # tvcache
 
+Run the synthetic original-versus-FIFO comparison with
+`cargo run --bin replay -- data/synthetic/balanced both 1`.
+See [replay instructions and assumptions](docs/replay.md) and the
+[shared policy contract](docs/policy-contract.md).
+
 An in-memory cache server for **agentic RL rollouts**. It stores the result of
 each tool call, keyed by the sequence of state-mutating calls that produced it,
 so that identical rollout prefixes execute once instead of once per rollout. It
