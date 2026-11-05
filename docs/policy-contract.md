@@ -23,6 +23,28 @@ Run `cargo test policy::fifo` for its tests.
 this trait for LRU, LFU, TCG heuristics, or a predictor; select implementations
 with `Box<dyn CachePolicy>`. No model runtime is required by the interface.
 
+## LRU and LFU
+
+`src/policy/classic.rs` provides `ClassicPolicy::lru()` and `ClassicPolicy::lfu()`.
+
+- **State**: per resident entry, a hit count (1 on insert, +1 per access while
+  resident) and the event index of its latest insert or access. Counts reset on
+  eviction (in-cache LFU). Misses never create state. Persistent-count LFU is
+  `LinearPolicy` with only `frequency = 1` (`configs/lfu-persistent.json`).
+- **Subtree actions**: scored by the max over tracked `affected` entries, so a
+  hot descendant protects its ancestors and in practice leaves go first.
+- **Order**: evict the lowest key. LRU `(last, |affected|, root id)`, LFU
+  `(hits, last, |affected|, root id)`.
+- **Newcomers**: an action that would remove `incoming` is chosen only when no
+  other legal action is left, matching textbook "always admit" LRU/LFU.
+- Admission accepts any entry that fits both total budgets (`admit_if_fits`).
+
+On flattened traces (every node made top-level), decisions are identical to a
+single-entry reference LRU/LFU; `cargo test --test replay flat_` checks that.
+`replay::check_decisions` rebuilds residency from any run's decision log and
+checks hits, victims, and the budget; `cargo run --release --bin sweep` applies
+it to every policy on every trace and budget.
+
 ## Existing server behavior
 
 `src/eviction/mod.rs` defines configuration and eviction result types, not a
@@ -115,7 +137,7 @@ snapshot candidate as an admitted snapshot and does not calculate net savings.
 
 ## Team handoff
 
-- James: implement `CachePolicy` for LRU/LFU; document miss-counting and tie rules.
+- James: LRU/LFU implemented; miss-counting and tie rules are under [LRU and LFU](#lru-and-lfu).
 - Wu: implement heuristics/predictor using the same callbacks and metadata.
 - Evaluator: own residency, construct legal candidates, invoke lifecycle, and
   measure hits, savings, memory, and policy overhead. The trait returns decisions,

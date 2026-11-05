@@ -34,13 +34,7 @@ impl CachePolicy for FifoPolicy {
         charge: MemoryCharge,
         context: &CacheContext,
     ) -> AdmissionDecision {
-        if charge.resident_bytes <= context.capacity.resident_bytes
-            && charge.external_snapshot_bytes <= context.capacity.external_snapshot_bytes
-        {
-            AdmissionDecision::Admit
-        } else {
-            AdmissionDecision::Bypass
-        }
+        admit_if_fits(charge, context)
     }
 
     fn choose_victim(

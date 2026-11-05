@@ -1,4 +1,5 @@
 //! Storage-independent contracts. See docs/policy-contract.md for lifecycle rules.
+pub mod classic;
 pub mod fifo;
 pub(crate) mod history;
 pub mod linear;
@@ -103,6 +104,17 @@ pub struct EvictionCandidate<'a> {
     pub affected: &'a [EntryId],
     pub reclaimable: MemoryCharge,
     pub features: &'a AccessFeatures,
+}
+
+/// Admit a candidate that individually fits both total budgets; eviction may still be needed.
+pub fn admit_if_fits(charge: MemoryCharge, context: &CacheContext) -> AdmissionDecision {
+    if charge.resident_bytes <= context.capacity.resident_bytes
+        && charge.external_snapshot_bytes <= context.capacity.external_snapshot_bytes
+    {
+        AdmissionDecision::Admit
+    } else {
+        AdmissionDecision::Bypass
+    }
 }
 
 /// Object-safe: evaluator may select Box<dyn CachePolicy> at runtime.

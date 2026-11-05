@@ -9,8 +9,21 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io,
     sync::Arc,
+    time::Instant,
 };
 use tokio::sync::Mutex;
+
+/// One decision per event, in tvcache_eval's `Decision` format so
+/// `python3 -m tvcache_eval score` can check and rescore a run.
+#[derive(Debug, Serialize)]
+pub struct DecisionRecord {
+    pub event_index: u64,
+    pub node_id: String,
+    pub hit: bool,
+    pub admit: bool,
+    pub evict: Vec<String>,
+    pub store_snapshot: bool,
+}
 
 #[derive(Debug, Serialize)]
 pub struct ReplayReport {
@@ -31,10 +44,66 @@ pub struct ReplayReport {
     pub peak_bytes_before_enforcement: u64,
     pub peak_bytes_after_enforcement: u64,
     pub final_bytes: u64,
+    /// Time inside policy callbacks only; engine candidate building is excluded.
+    pub policy_calls: u64,
+    pub policy_ns: u64,
+    #[serde(skip)]
+    pub decisions: Vec<DecisionRecord>,
 }
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn timed<T>(report: &mut ReplayReport, call: impl FnOnce() -> T) -> T {
+    let start = Instant::now();
+    let result = call();
+    report.policy_ns += start.elapsed().as_nanos() as u64;
+    report.policy_calls += 1;
+    result
+}
+
+/// Independent check of a run: rebuild residency from the decision log alone and
+/// confirm every hit and victim was resident and the budget held after each event.
+pub fn check_decisions(
+    report: &ReplayReport,
+    catalog: &TraceCatalog,
+    events: &[AccessRecord],
+) -> Result<(), String> {
+    if report.decisions.len() != events.len() {
+        return Err(format!("{} decisions for {} events", report.decisions.len(), events.len()));
+    }
+    let mut resident: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut used = 0u64;
+    for (d, event) in report.decisions.iter().zip(events) {
+        let at = d.event_index;
+        if at != event.event_index || d.node_id != event.node_id {
+            return Err(format!("event {at}: decision does not match trace"));
+        }
+        if d.hit != resident.contains_key(d.node_id.as_str()) {
+            return Err(format!("event {at}: hit disagrees with residency"));
+        }
+        if d.hit && d.admit {
+            return Err(format!("event {at}: admission on a hit"));
+        }
+        for victim in &d.evict {
+            used -= resident
+                .remove(victim.as_str())
+                .ok_or_else(|| format!("event {at}: victim {victim} not resident"))?;
+        }
+        if d.admit {
+            let bytes = catalog.resolve(event).map_err(|e| e.to_string())?.0.cache_entry_bytes;
+            resident.insert(&d.node_id, bytes);
+            used += bytes;
+        }
+        if used > report.capacity_bytes {
+            return Err(format!("event {at}: {used} bytes exceeds budget"));
+        }
+    }
+    if report.decisions.iter().filter(|d| d.hit).count() as u64 != report.hits {
+        return Err("hit count disagrees with report".into());
+    }
+    Ok(())
 }
 struct Resident {
     meta: EntryMeta,
@@ -80,6 +149,9 @@ pub async fn replay(
         peak_bytes_before_enforcement: 0,
         peak_bytes_after_enforcement: 0,
         final_bytes: 0,
+        policy_calls: 0,
+        policy_ns: 0,
+        decisions: Vec::new(),
     };
     let mut previous = None;
     for event in events {
@@ -109,10 +181,18 @@ pub async fn replay(
         };
         let features = history.features(&entry, access);
         if let Some(p) = policy.as_mut() {
-            p.on_access(&entry, &features, outcome, &access);
+            timed(&mut report, || p.on_access(&entry, &features, outcome, &access));
         }
         history.observe(&entry, access);
         report.requests += 1;
+        report.decisions.push(DecisionRecord {
+            event_index: access.event_index,
+            node_id: entry.id.node_id.clone(),
+            hit,
+            admit: false,
+            evict: Vec::new(),
+            store_snapshot: false,
+        });
         if hit {
             report.hits += 1;
             report.gross_tool_ms_saved += entry.runtime_ms.unwrap_or(0.0);
@@ -157,14 +237,12 @@ pub async fn replay(
             },
         };
         if let Some(p) = policy.as_mut() {
-            if p.admission(
-                &entry,
-                MemoryCharge {
-                    resident_bytes: entry.cache_entry_bytes,
-                    external_snapshot_bytes: 0,
-                },
-                &context(used),
-            ) == AdmissionDecision::Bypass
+            let charge = MemoryCharge {
+                resident_bytes: entry.cache_entry_bytes,
+                external_snapshot_bytes: 0,
+            };
+            if timed(&mut report, || p.admission(&entry, charge, &context(used)))
+                == AdmissionDecision::Bypass
             {
                 report.bypassed_by_policy += 1;
                 continue;
@@ -195,8 +273,9 @@ pub async fn replay(
         }
         used += entry.cache_entry_bytes;
         if let Some(p) = policy.as_mut() {
-            p.on_insert(&entry, &context(used));
+            timed(&mut report, || p.on_insert(&entry, &context(used)));
         }
+        report.decisions.last_mut().unwrap().admit = true;
         residents.insert(
             entry.id.clone(),
             Resident {
@@ -241,9 +320,10 @@ pub async fn replay(
                         features,
                     })
                     .collect();
-                let index = p
-                    .choose_victim(Some(&entry), &candidates, &context(used))
-                    .ok_or_else(|| invalid("policy declined eviction while over capacity"))?;
+                let index = timed(&mut report, || {
+                    p.choose_victim(Some(&entry), &candidates, &context(used))
+                })
+                .ok_or_else(|| invalid("policy declined eviction while over capacity"))?;
                 let candidate = candidates
                     .get(index)
                     .ok_or_else(|| invalid("invalid victim index"))?;
@@ -265,7 +345,11 @@ pub async fn replay(
                 used -= bytes;
                 for id in &affected {
                     residents.remove(id);
-                    p.on_remove(id, RemovalReason::Capacity, &context(used));
+                    timed(&mut report, || {
+                        p.on_remove(id, RemovalReason::Capacity, &context(used))
+                    });
+                    let decision = report.decisions.last_mut().unwrap();
+                    decision.evict.push(id.node_id.clone());
                 }
                 report.evicted_entries += affected.len() as u64;
             }
@@ -296,8 +380,18 @@ pub async fn replay(
                         }
                     }
                 }
+                let decision = report.decisions.last_mut().unwrap();
+                for id in residents.keys().filter(|id| !live.contains(*id)) {
+                    decision.evict.push(id.node_id.clone());
+                }
                 residents.retain(|id, _| live.contains(id));
             }
+        }
+        // Evicting the just-inserted entry in the same event is, net, a bypass.
+        let decision = report.decisions.last_mut().unwrap();
+        if let Some(i) = decision.evict.iter().position(|id| *id == decision.node_id) {
+            decision.evict.remove(i);
+            decision.admit = false;
         }
         if used > capacity {
             return Err(invalid("cache exceeds capacity after enforcement"));

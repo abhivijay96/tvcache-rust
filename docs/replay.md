@@ -8,9 +8,19 @@ cargo run --bin replay -- data/synthetic/balanced original 1
 cargo run --bin replay -- data/synthetic/balanced fifo 1
 ```
 
-Arguments: dataset directory, `original|fifo|both|linear|all`, and integer capacity in MiB.
-`linear` selects the [linear heuristic](linear-policy.md); `all` includes all
-three policies. A fourth argument optionally supplies linear weights as JSON.
+Arguments: dataset directory, `original|fifo|both|linear|lru|lfu|all`, and integer capacity in MiB.
+`linear` selects the [linear heuristic](linear-policy.md); `lru` and `lfu` select
+the [classic policies](policy-contract.md#lru-and-lfu); `all` runs all five.
+A fourth argument optionally supplies linear weights as JSON.
+
+`--decisions=DIR` also writes `DIR/<policy>.decisions.jsonl`: one record per
+event in `tvcache_eval`'s `Decision` format, so a run can be independently
+checked and rescored with `python3 -m tvcache_eval score DATASET LOG --budget-mib N`.
+An entry inserted and evicted in the same event is logged as not admitted.
+Reports include `policy_calls` and `policy_ns`, the time spent inside policy
+callbacks only (engine candidate building is excluded).
+`cargo run --release --bin sweep` runs every policy across a budget range on all
+four traces, checks each decision log, and writes `results/lru-lfu/summary.csv`.
 JSON goes to stdout. Use 0 for a no-cache control and 16 to hold all balanced
 dataset entries. `cargo run` without `--bin` still starts the normal server.
 
