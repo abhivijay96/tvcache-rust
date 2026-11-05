@@ -1,0 +1,11 @@
+{
+  "frequency": 1.0,
+  "recency": 1.0,
+  "runtime": 1.0,
+  "dollar_cost": 1.0,
+  "inverse_size": 1.0,
+  "depth": 1.0,
+  "branching": 1.0,
+  "subtree_frequency": 1.0,
+  "subtree_recency": 1.0
+}

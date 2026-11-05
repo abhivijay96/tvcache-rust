@@ -82,3 +82,43 @@ async fn rejects_out_of_order_requests() {
     events.swap(0, 1);
     assert!(replay(&catalog, &events, 1, fifo()).await.is_err());
 }
+
+#[tokio::test]
+async fn linear_uses_recomputed_history_and_records_weights() {
+    use tvcache::policy::linear::{LinearPolicy, LinearWeights};
+    let (catalog, events) = fixture(&["a", "a", "b", "a", "b"], 600_000);
+    // The fixture events contain empty/default features: replay must compute them.
+    let weights = LinearWeights {
+        frequency: 1.0,
+        recency: 0.0,
+        runtime: 0.0,
+        dollar_cost: 0.0,
+        inverse_size: 0.0,
+        depth: 0.0,
+        branching: 0.0,
+        subtree_frequency: 0.0,
+        subtree_recency: 0.0,
+    };
+    let report = replay(
+        &catalog,
+        &events,
+        1,
+        Some(Box::new(LinearPolicy::new(weights).unwrap())),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.hits, 2);
+    assert_eq!(report.policy_parameters.unwrap()["frequency"], 1.0);
+    assert!(report.peak_bytes_after_enforcement <= report.capacity_bytes);
+    for capacity in [0, 2] {
+        let report = replay(
+            &catalog,
+            &events,
+            capacity,
+            Some(Box::new(LinearPolicy::default())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.hits, if capacity == 0 { 0 } else { 3 });
+    }
+}

@@ -1,5 +1,7 @@
 //! Storage-independent contracts. See docs/policy-contract.md for lifecycle rules.
 pub mod fifo;
+pub(crate) mod history;
+pub mod linear;
 pub mod synthetic;
 
 use serde::{Deserialize, Serialize};
@@ -107,6 +109,11 @@ pub struct EvictionCandidate<'a> {
 /// Policy owns ranking/model state; engine owns entries, legality and accounting.
 pub trait CachePolicy: Send {
     fn name(&self) -> &str;
+
+    /// Optional configuration recorded by the evaluator for reproducibility.
+    fn parameters(&self) -> Option<serde_json::Value> {
+        None
+    }
 
     /// Called once per logical request, including misses and bypassed requests.
     /// `features` describe history BEFORE this access.

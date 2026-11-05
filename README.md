@@ -5,6 +5,9 @@ Run the synthetic original-versus-FIFO comparison with
 See [replay instructions and assumptions](docs/replay.md) and the
 [shared policy contract](docs/policy-contract.md).
 
+The [linear TCG heuristic](docs/linear-policy.md) is available with
+`cargo run --bin replay -- data/synthetic/balanced linear 1`.
+
 An in-memory cache server for **agentic RL rollouts**. It stores the result of
 each tool call, keyed by the sequence of state-mutating calls that produced it,
 so that identical rollout prefixes execute once instead of once per rollout. It

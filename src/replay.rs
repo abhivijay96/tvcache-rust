@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Serialize)]
 pub struct ReplayReport {
     pub policy: String,
+    pub policy_parameters: Option<serde_json::Value>,
     pub mode: &'static str,
     pub capacity_bytes: u64,
     pub requests: u64,
@@ -37,7 +38,6 @@ fn invalid(message: &str) -> io::Error {
 }
 struct Resident {
     meta: EntryMeta,
-    features: AccessFeatures,
 }
 
 /// None selects the original enforcer. Both modes enforce after insertion and
@@ -57,7 +57,9 @@ pub async fn replay(
     let cache = Arc::new(Mutex::new(TVCache::new()));
     let mut residents: BTreeMap<EntryId, Resident> = BTreeMap::new();
     let mut used = 0u64;
+    let mut history = history::ObservedHistory::default();
     let mut report = ReplayReport {
+        policy_parameters: policy.as_ref().and_then(|p| p.parameters()),
         policy: policy
             .as_ref()
             .map_or("original-ttl-and-watermark", |p| p.name())
@@ -105,13 +107,12 @@ pub async fn replay(
         } else {
             AccessOutcome::Miss
         };
+        let features = history.features(&entry, access);
         if let Some(p) = policy.as_mut() {
-            p.on_access(&entry, &event.features, outcome, &access);
+            p.on_access(&entry, &features, outcome, &access);
         }
+        history.observe(&entry, access);
         report.requests += 1;
-        if let Some(r) = residents.get_mut(&entry.id) {
-            r.features = event.features.clone();
-        }
         if hit {
             report.hits += 1;
             report.gross_tool_ms_saved += entry.runtime_ms.unwrap_or(0.0);
@@ -200,13 +201,16 @@ pub async fn replay(
             entry.id.clone(),
             Resident {
                 meta: entry.clone(),
-                features: event.features.clone(),
             },
         );
         report.peak_bytes_before_enforcement = report.peak_bytes_before_enforcement.max(used);
         if let Some(p) = policy.as_mut() {
             while used > capacity {
                 let roots: Vec<_> = residents.values().collect();
+                let features: Vec<_> = roots
+                    .iter()
+                    .map(|r| history.features(&r.meta, access))
+                    .collect();
                 let groups: Vec<Vec<EntryId>> = roots
                     .iter()
                     .map(|root| {
@@ -223,7 +227,8 @@ pub async fn replay(
                 let candidates: Vec<_> = roots
                     .iter()
                     .zip(&groups)
-                    .map(|(root, ids)| EvictionCandidate {
+                    .zip(&features)
+                    .map(|((root, ids), features)| EvictionCandidate {
                         root: &root.meta,
                         affected: ids,
                         reclaimable: MemoryCharge {
@@ -233,7 +238,7 @@ pub async fn replay(
                                 .sum(),
                             external_snapshot_bytes: 0,
                         },
-                        features: &root.features,
+                        features,
                     })
                     .collect();
                 let index = p

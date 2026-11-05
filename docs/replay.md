@@ -8,7 +8,9 @@ cargo run --bin replay -- data/synthetic/balanced original 1
 cargo run --bin replay -- data/synthetic/balanced fifo 1
 ```
 
-Arguments: dataset directory, `original|fifo|both`, and integer capacity in MiB.
+Arguments: dataset directory, `original|fifo|both|linear|all`, and integer capacity in MiB.
+`linear` selects the [linear heuristic](linear-policy.md); `all` includes all
+three policies. A fourth argument optionally supplies linear weights as JSON.
 JSON goes to stdout. Use 0 for a no-cache control and 16 to hold all balanced
 dataset entries. `cargo run` without `--bin` still starts the normal server.
 
@@ -36,9 +38,9 @@ execute missing prefixes to reconstruct a sandbox.
   results can vary across processes. FIFO is deterministic for a given trace.
 - Savings are gross sums of synthetic fixture costs on result hits, not measured
   training speedup or net savings. Unknown dollar costs propagate to null.
-- Candidate features are the last observed event features, not continuously
-  updated subtree statistics. FIFO ignores them. Update ancestor statistics
-  before benchmarking a TCG-aware policy with this runner.
+- Candidate features are refreshed from causal request history, including
+  ancestor/subtree accesses. Counts persist across evictions; see the
+  [linear policy feature definitions](linear-policy.md).
 
 `src/replay.rs` implements replay; `src/bin/replay.rs` is the CLI. The manifest
 format is checked. Event indices must increase and times must not decrease.
