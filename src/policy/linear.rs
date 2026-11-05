@@ -110,13 +110,7 @@ impl CachePolicy for LinearPolicy {
         charge: MemoryCharge,
         ctx: &CacheContext,
     ) -> AdmissionDecision {
-        if charge.resident_bytes <= ctx.capacity.resident_bytes
-            && charge.external_snapshot_bytes <= ctx.capacity.external_snapshot_bytes
-        {
-            AdmissionDecision::Admit
-        } else {
-            AdmissionDecision::Bypass
-        }
+        admit_if_fits(charge, ctx)
     }
     fn choose_victim(
         &mut self,
