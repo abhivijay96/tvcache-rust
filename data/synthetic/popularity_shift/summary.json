@@ -1,0 +1,129 @@
+{
+  "events": 10575,
+  "phases": [
+    {
+      "hot_tasks": [
+        "task_0000",
+        "task_0001",
+        "task_0002",
+        "task_0003",
+        "task_0004",
+        "task_0005"
+      ],
+      "phase": 0,
+      "rollouts": 340,
+      "task_rollouts": {
+        "task_0000": 129,
+        "task_0001": 82,
+        "task_0002": 47,
+        "task_0003": 27,
+        "task_0004": 19,
+        "task_0005": 21,
+        "task_0006": 6,
+        "task_0007": 1,
+        "task_0008": 3,
+        "task_0009": 2,
+        "task_0010": 1,
+        "task_0012": 1,
+        "task_0013": 1
+      }
+    },
+    {
+      "hot_tasks": [
+        "task_0008",
+        "task_0009",
+        "task_0010",
+        "task_0011",
+        "task_0012",
+        "task_0013"
+      ],
+      "phase": 1,
+      "rollouts": 330,
+      "task_rollouts": {
+        "task_0000": 7,
+        "task_0001": 2,
+        "task_0002": 3,
+        "task_0003": 2,
+        "task_0004": 1,
+        "task_0005": 1,
+        "task_0006": 1,
+        "task_0008": 121,
+        "task_0009": 70,
+        "task_0010": 45,
+        "task_0011": 29,
+        "task_0012": 28,
+        "task_0013": 18,
+        "task_0019": 1,
+        "task_0022": 1
+      }
+    },
+    {
+      "hot_tasks": [
+        "task_0016",
+        "task_0017",
+        "task_0018",
+        "task_0019",
+        "task_0020",
+        "task_0021"
+      ],
+      "phase": 2,
+      "rollouts": 330,
+      "task_rollouts": {
+        "task_0000": 7,
+        "task_0001": 2,
+        "task_0002": 2,
+        "task_0003": 2,
+        "task_0007": 1,
+        "task_0011": 1,
+        "task_0016": 144,
+        "task_0017": 68,
+        "task_0018": 42,
+        "task_0019": 35,
+        "task_0020": 18,
+        "task_0021": 8
+      }
+    }
+  ],
+  "read_only_nodes": 217,
+  "repeat_accesses": 9731,
+  "repeat_fraction": 0.92018913,
+  "repeat_tool_cost_usd": 8.8218805,
+  "repeat_tool_time_ms": 4159294.45479685,
+  "rollouts": 1000,
+  "snapshot_candidate_nodes": 309,
+  "task_rollouts": {
+    "task_0000": 143,
+    "task_0001": 86,
+    "task_0002": 52,
+    "task_0003": 31,
+    "task_0004": 20,
+    "task_0005": 22,
+    "task_0006": 7,
+    "task_0007": 2,
+    "task_0008": 124,
+    "task_0009": 72,
+    "task_0010": 46,
+    "task_0011": 30,
+    "task_0012": 29,
+    "task_0013": 19,
+    "task_0016": 144,
+    "task_0017": 68,
+    "task_0018": 42,
+    "task_0019": 36,
+    "task_0020": 18,
+    "task_0021": 8,
+    "task_0022": 1
+  },
+  "tool_accesses": {
+    "compile": 1655,
+    "shell": 6376,
+    "sql_read": 1880,
+    "web_read": 664
+  },
+  "uncached_tool_cost_usd": 9.4792135,
+  "uncached_tool_time_ms": 4593782.74928679,
+  "unique_cache_entry_bytes": 10300819,
+  "unique_external_snapshot_bytes": 4771173699,
+  "unique_nodes": 844,
+  "unique_tasks_observed": 21
+}

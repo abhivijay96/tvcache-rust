@@ -1,0 +1,120 @@
+{
+  "config": {
+    "branch_factor": 3,
+    "event_interval_ms": 1,
+    "hot_template_probability": 0.65,
+    "inter_rollout_gap_ms": 10,
+    "max_stateful_calls": 10,
+    "min_stateful_calls": 6,
+    "node_overhead_bytes": 256,
+    "num_rollouts": 1000,
+    "num_tasks": 24,
+    "phases": [
+      {
+        "fraction": 1,
+        "hot_task_fraction": 0.25,
+        "hot_task_offset": 0,
+        "hot_task_probability": 0.8
+      }
+    ],
+    "read_only_probability": 0.3,
+    "seed": 42,
+    "shared_prefix_length": 3,
+    "snapshot": {
+      "create_ms_per_mib": 2,
+      "handle_bytes": 64,
+      "mode": "cost_threshold",
+      "probability": 0.5,
+      "restore_ms_per_mib": 1,
+      "size_bytes": {
+        "max": 67108864,
+        "min": 1048576
+      }
+    },
+    "task_zipf_exponent": 1.1,
+    "templates_per_task": 8,
+    "tool_profiles": [
+      {
+        "cost_usd": {
+          "max": 0.0001,
+          "min": 0
+        },
+        "mutates_state": true,
+        "name": "shell",
+        "runtime_ms": {
+          "max": 100,
+          "min": 2
+        },
+        "value_bytes": {
+          "max": 8192,
+          "min": 128
+        },
+        "weight": 3
+      },
+      {
+        "cost_usd": {
+          "max": 0.01,
+          "min": 0.0001
+        },
+        "mutates_state": true,
+        "name": "compile",
+        "runtime_ms": {
+          "max": 10000,
+          "min": 200
+        },
+        "value_bytes": {
+          "max": 65536,
+          "min": 1024
+        },
+        "weight": 1
+      },
+      {
+        "cost_usd": {
+          "max": 0.001,
+          "min": 0
+        },
+        "mutates_state": false,
+        "name": "sql_read",
+        "runtime_ms": {
+          "max": 500,
+          "min": 5
+        },
+        "value_bytes": {
+          "max": 262144,
+          "min": 256
+        },
+        "weight": 2
+      },
+      {
+        "cost_usd": {
+          "max": 0.02,
+          "min": 0.0001
+        },
+        "mutates_state": false,
+        "name": "web_read",
+        "runtime_ms": {
+          "max": 2000,
+          "min": 20
+        },
+        "value_bytes": {
+          "max": 131072,
+          "min": 512
+        },
+        "weight": 1
+      }
+    ]
+  },
+  "files_sha256": {
+    "events.jsonl": "eb78438ff11a48575027d641bd4a6ae0b2f7e4c3e46e998ed23ff56a769d5cbc",
+    "nodes.jsonl": "0184c35e2b24677b3d606f9b198b6519df22abe3c6471c7b4d110471c8bae58f",
+    "summary.json": "beeee70548e0543370e91464600f501d6d969cb8fb6fac1f575ff3a43cc5608f"
+  },
+  "format": "tvcache-synthetic-v1",
+  "generator_version": "1.0.0",
+  "synthetic": true,
+  "upstream_reference": {
+    "basis": "Documented stateful-prefix semantics; not a native dump or wire format.",
+    "tvcache_rust": "https://github.com/abhivijay96/tvcache-rust#readme",
+    "tvclient": "https://github.com/abhivijay96/tvclient#readme"
+  }
+}
