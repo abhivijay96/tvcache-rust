@@ -1,0 +1,7 @@
+{
+  "_comment": "Smoke test only: the four checked-in synthetic traces, one per split role. Replace with the generated train/val/test traces.",
+  "train": ["../../data/synthetic/balanced", "../../data/synthetic/expensive_reuse"],
+  "val": ["../../data/synthetic/popularity_shift"],
+  "test": ["../../data/synthetic/memory_pressure"],
+  "budget_fractions": [0.1, 0.25, 0.5]
+}

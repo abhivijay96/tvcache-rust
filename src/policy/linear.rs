@@ -38,18 +38,6 @@ pub struct LinearPolicy {
     weights: LinearWeights,
 }
 
-fn bounded(value: f64, scale: f64) -> f64 {
-    if value.is_finite() && value >= 0.0 {
-        1.0 - scale / (scale + value)
-    } else {
-        0.0
-    }
-}
-
-fn recent(age: Option<u64>) -> f64 {
-    age.map_or(0.0, |age| 100.0 / (100.0 + age as f64))
-}
-
 impl LinearPolicy {
     pub fn new(weights: LinearWeights) -> Result<Self, &'static str> {
         let values = [
@@ -74,18 +62,17 @@ impl LinearPolicy {
     /// Root statistics are a proxy for an action's benefit, not a sum of all
     /// descendant runtimes/dollars. Larger scores mean retain longer.
     pub fn score(&self, candidate: &EvictionCandidate<'_>) -> f64 {
-        let f = candidate.features;
-        let e = candidate.root;
+        let f = features::basic(candidate);
         let w = &self.weights;
-        w.frequency * bounded(f.access_count_before as f64, 1.0)
-            + w.recency * recent(f.events_since_last_access)
-            + w.runtime * bounded(e.runtime_ms.unwrap_or(0.0), 1000.0)
-            + w.dollar_cost * bounded(e.tool_cost_usd.unwrap_or(0.0), 0.001)
-            + w.inverse_size * (1024.0 / (1024.0 + candidate.reclaimable.resident_bytes as f64))
-            + w.depth * bounded(e.depth as f64, 1.0)
-            + w.branching * bounded(f.observed_children_before as f64, 1.0)
-            + w.subtree_frequency * bounded(f.subtree_access_count_before as f64, 1.0)
-            + w.subtree_recency * recent(f.events_since_subtree_access)
+        w.frequency * f[0]
+            + w.recency * f[1]
+            + w.runtime * f[2]
+            + w.dollar_cost * f[3]
+            + w.inverse_size * f[4]
+            + w.depth * f[5]
+            + w.branching * f[6]
+            + w.subtree_frequency * f[7]
+            + w.subtree_recency * f[8]
     }
 }
 

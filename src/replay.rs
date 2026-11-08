@@ -109,13 +109,37 @@ struct Resident {
     meta: EntryMeta,
 }
 
+/// Sees every policy eviction: the legal candidates and the chosen index, before
+/// the removal is applied. Used to dump training data for learned policies.
+pub trait EvictionObserver {
+    fn observe(
+        &mut self,
+        context: &CacheContext,
+        incoming: &EntryMeta,
+        candidates: &[EvictionCandidate<'_>],
+        chosen: usize,
+    ) -> io::Result<()>;
+}
+
 /// None selects the original enforcer. Both modes enforce after insertion and
 /// report transient overshoot. Snapshot costs and TTLs are intentionally disabled.
 pub async fn replay(
     catalog: &TraceCatalog,
     events: &[AccessRecord],
     capacity_mib: u32,
+    policy: Option<Box<dyn CachePolicy>>,
+) -> io::Result<ReplayReport> {
+    replay_observed(catalog, events, capacity_mib, policy, None).await
+}
+
+/// `replay`, also reporting each policy eviction to `observer`. The original
+/// enforcer builds no candidates, so it is never observed.
+pub async fn replay_observed(
+    catalog: &TraceCatalog,
+    events: &[AccessRecord],
+    capacity_mib: u32,
     mut policy: Option<Box<dyn CachePolicy>>,
+    mut observer: Option<&mut dyn EvictionObserver>,
 ) -> io::Result<ReplayReport> {
     let config = EvictionPolicyConfig::new(
         EvictionPolicyName::TtlAndWatermark,
@@ -327,6 +351,9 @@ pub async fn replay(
                 let candidate = candidates
                     .get(index)
                     .ok_or_else(|| invalid("invalid victim index"))?;
+                if let Some(o) = observer.as_mut() {
+                    o.observe(&context(used), &entry, &candidates, index)?;
+                }
                 let root = candidate.root.clone();
                 let affected = candidate.affected.to_vec();
                 let bytes = candidate.reclaimable.resident_bytes;

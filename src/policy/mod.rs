@@ -1,8 +1,10 @@
 //! Storage-independent contracts. See docs/policy-contract.md for lifecycle rules.
 pub mod classic;
+pub mod features;
 pub mod fifo;
 pub(crate) mod history;
 pub mod linear;
+pub mod mlp;
 pub mod synthetic;
 
 use serde::{Deserialize, Serialize};
