@@ -1,0 +1,33 @@
+[
+  {
+    "policy": "linear",
+    "policy_parameters": {
+      "branching": 0.0,
+      "depth": 0.0,
+      "dollar_cost": 0.0,
+      "frequency": 1.0,
+      "inverse_size": 0.0,
+      "recency": 0.0,
+      "runtime": 0.0,
+      "subtree_frequency": 0.0,
+      "subtree_recency": 0.0
+    },
+    "mode": "result-only; no TTL/snapshots; trace entry sizes; post-insert enforcement each event",
+    "capacity_bytes": 10485760,
+    "requests": 10575,
+    "hits": 9731,
+    "misses": 844,
+    "hit_rate": 0.9201891252955082,
+    "gross_tool_ms_saved": 4159294.454796849,
+    "gross_tool_cost_usd_saved": 8.82188049999994,
+    "evicted_entries": 0,
+    "bypassed_oversized": 0,
+    "bypassed_missing_parent": 0,
+    "bypassed_by_policy": 0,
+    "peak_bytes_before_enforcement": 10300819,
+    "peak_bytes_after_enforcement": 10300819,
+    "final_bytes": 10300819,
+    "policy_calls": 12263,
+    "policy_ns": 311546
+  }
+]

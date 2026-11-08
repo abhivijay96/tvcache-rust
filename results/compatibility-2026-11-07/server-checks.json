@@ -1,0 +1,99 @@
+{
+  "supported_checks": [
+    {
+      "check": "protocol",
+      "exit_code": 0,
+      "elapsed_seconds": 0.17104160704184324,
+      "command": [
+        "test_client.py"
+      ]
+    },
+    {
+      "check": "ttl",
+      "exit_code": 0,
+      "elapsed_seconds": 5.557524046045728,
+      "command": [
+        "test_ttl_eviction.py"
+      ]
+    },
+    {
+      "check": "watermark",
+      "exit_code": 0,
+      "elapsed_seconds": 15.64508767100051,
+      "command": [
+        "test_eviction.py"
+      ]
+    },
+    {
+      "check": "load-32",
+      "exit_code": 0,
+      "build_workers": 8,
+      "evidence": "load-32.log completed with assertions enabled"
+    },
+    {
+      "check": "sandbox-lifecycle",
+      "exit_code": 0,
+      "elapsed_seconds": 5.786708372994326,
+      "command": [
+        "test_sandbox_lifecycle.py"
+      ]
+    },
+    {
+      "check": "tvclient-current",
+      "exit_code": 0,
+      "elapsed_seconds": 1.7188323460286483,
+      "command": [
+        "test_tvclient_current.py"
+      ]
+    },
+    {
+      "check": "load-64",
+      "exit_code": 0,
+      "elapsed_seconds": 353.9901477090316,
+      "command": [
+        "load_test.py",
+        "--num-tasks",
+        "64",
+        "--num-rollouts",
+        "2,4,8,16",
+        "--timeout",
+        "60",
+        "--build-workers",
+        "32",
+        "--task-prefix",
+        "compatibility-64"
+      ]
+    },
+    {
+      "check": "load-128",
+      "exit_code": 0,
+      "elapsed_seconds": 244.93607967405114,
+      "command": [
+        "load_test.py",
+        "--num-tasks",
+        "128",
+        "--num-rollouts",
+        "2,4,8,16",
+        "--timeout",
+        "60",
+        "--build-workers",
+        "128",
+        "--task-prefix",
+        "compatibility-1794082147302387083-128"
+      ],
+      "eviction_policy": "none",
+      "build_workers": 128
+    }
+  ],
+  "supported_passed": 8,
+  "legacy_client_test": {
+    "check": "tvclient",
+    "exit_code": 1,
+    "elapsed_seconds": 0.425100906053558,
+    "command": [
+      "test_tvclient.py"
+    ],
+    "status": "incompatible API: AsyncStatefulExecutor and ToolCallEnv are no longer exported"
+  },
+  "corrected_setup": "Initial sandbox lifecycle failure used eviction disabled; rerun with ttl_and_watermark passed."
+}

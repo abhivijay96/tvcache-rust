@@ -1,0 +1,8 @@
+Creating eviction dataset with prefix=eviction-1794081342
+Warming 6 hot tasks before adding cold bulk
+Test-owned cache size before eviction wait: 2502224 bytes
+Test-owned nodes before eviction wait: 152
+Test-owned cache size after eviction wait: 1975440 bytes
+Hot nodes retained: 48/48 (100.00%)
+Cold nodes retained: 72/144 (50.00%)
+Eviction policy test passed

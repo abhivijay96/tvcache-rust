@@ -1,0 +1,81 @@
+Starting load test: num_tasks=32 num_rollouts=[2, 4, 8, 16] total_rollouts=960 depth=5 width=random(1..8) build_workers=8 seed=12345 prefix=compatibility-32
+compatibility-32-task-00: nodes=3677 sandboxes=921 valid_finds=3677
+compatibility-32-task-01: nodes=995 sandboxes=255 valid_finds=995
+compatibility-32-task-02: nodes=1693 sandboxes=431 valid_finds=1693
+compatibility-32-task-03: nodes=693 sandboxes=157 valid_finds=693
+compatibility-32-task-04: nodes=3554 sandboxes=867 valid_finds=3554
+compatibility-32-task-05: nodes=260 sandboxes=63 valid_finds=260
+compatibility-32-task-06: nodes=1523 sandboxes=371 valid_finds=1523
+compatibility-32-task-07: nodes=1444 sandboxes=352 valid_finds=1444
+compatibility-32-task-08: nodes=1955 sandboxes=494 valid_finds=1955
+compatibility-32-task-09: nodes=2485 sandboxes=564 valid_finds=2485
+compatibility-32-task-10: nodes=875 sandboxes=216 valid_finds=875
+compatibility-32-task-11: nodes=4218 sandboxes=1125 valid_finds=4218
+compatibility-32-task-12: nodes=3881 sandboxes=934 valid_finds=3881
+compatibility-32-task-13: nodes=2897 sandboxes=696 valid_finds=2897
+compatibility-32-task-14: nodes=3175 sandboxes=774 valid_finds=3175
+compatibility-32-task-15: nodes=3434 sandboxes=862 valid_finds=3434
+compatibility-32-task-16: nodes=566 sandboxes=137 valid_finds=566
+compatibility-32-task-17: nodes=1192 sandboxes=309 valid_finds=1192
+compatibility-32-task-18: nodes=759 sandboxes=200 valid_finds=759
+compatibility-32-task-19: nodes=3967 sandboxes=971 valid_finds=3967
+compatibility-32-task-20: nodes=3086 sandboxes=757 valid_finds=3086
+compatibility-32-task-21: nodes=3674 sandboxes=880 valid_finds=3674
+compatibility-32-task-22: nodes=774 sandboxes=193 valid_finds=774
+compatibility-32-task-23: nodes=1529 sandboxes=386 valid_finds=1529
+compatibility-32-task-24: nodes=1073 sandboxes=261 valid_finds=1073
+compatibility-32-task-25: nodes=2044 sandboxes=476 valid_finds=2044
+compatibility-32-task-26: nodes=2211 sandboxes=536 valid_finds=2211
+compatibility-32-task-27: nodes=526 sandboxes=127 valid_finds=526
+compatibility-32-task-28: nodes=1826 sandboxes=465 valid_finds=1826
+compatibility-32-task-29: nodes=3590 sandboxes=894 valid_finds=3590
+compatibility-32-task-30: nodes=2536 sandboxes=651 valid_finds=2536
+compatibility-32-task-31: nodes=610 sandboxes=136 valid_finds=610
+TCG creation complete
+  tasks: 32
+  inserted nodes: 66722
+  inserted sandboxes: 16461
+  elapsed seconds: 443.57
+  inserts/sec: 150.42
+Starting rollout find phase: num_rollouts=2
+Rollout find phase complete
+  num_rollouts: 2
+  async_tasks: 64
+  finds: 64
+  mean rct ms: 8.46
+  median rct ms: 5.22
+  p95 rct ms: 27.35
+  elapsed seconds: 0.10
+  finds/sec: 645.10
+Starting rollout find phase: num_rollouts=4
+Rollout find phase complete
+  num_rollouts: 4
+  async_tasks: 128
+  finds: 128
+  mean rct ms: 9.09
+  median rct ms: 7.63
+  p95 rct ms: 21.15
+  elapsed seconds: 0.05
+  finds/sec: 2690.91
+Starting rollout find phase: num_rollouts=8
+Rollout find phase complete
+  num_rollouts: 8
+  async_tasks: 256
+  finds: 256
+  mean rct ms: 20.04
+  median rct ms: 21.25
+  p95 rct ms: 23.99
+  elapsed seconds: 0.08
+  finds/sec: 3234.53
+Starting rollout find phase: num_rollouts=16
+Rollout find phase complete
+  num_rollouts: 16
+  async_tasks: 512
+  finds: 512
+  mean rct ms: 35.27
+  median rct ms: 35.14
+  p95 rct ms: 41.56
+  elapsed seconds: 0.14
+  finds/sec: 3627.65
+Total rollouts complete: 960
+Load test complete

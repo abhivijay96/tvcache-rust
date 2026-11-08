@@ -1,5 +1,11 @@
 # tvcache
 
+Benchmark plotting scripts live in [`scripts/plots/`](scripts/plots/README.md).
+Generate the current figures with
+`scripts/plots/.venv/bin/python scripts/plots/plots_all.py`; inputs are grouped
+by run directory and outputs go to [`results/plots/`](results/plots/README.md).
+See the plotting guide for environment setup and multi-run inputs.
+
 Run the synthetic original-versus-FIFO comparison with
 `cargo run --bin replay -- data/synthetic/balanced both 1`.
 See [replay instructions and assumptions](docs/replay.md) and the

@@ -1,0 +1,7 @@
+setting,hit_rate,no_cache_median_s,cache_median_s,median_speedup,source,location
+Terminal 4B easy,0.202,8.67,1.40,6.18,https://arxiv.org/html/2602.10986v1,Section 4.1 and Table 2
+Terminal 4B medium,0.142,18.68,2.70,6.92,https://arxiv.org/html/2602.10986v1,Section 4.1 and Table 2
+Terminal 14B easy,0.253,8.07,2.35,3.44,https://arxiv.org/html/2602.10986v1,Section 4.1 and Table 2
+Terminal 14B medium,0.167,36.23,6.53,5.55,https://arxiv.org/html/2602.10986v1,Section 4.1 and Table 2
+SkyRL-SQL,0.3311,,,,https://arxiv.org/html/2602.10986v1,Section 4.2
+EgoSchema,0.643,,,,https://arxiv.org/html/2602.10986v1,Section 4.3

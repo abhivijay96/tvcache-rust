@@ -1,0 +1,6 @@
+parent insert response: {'type': 'insert_result', 'value_inserted': True, 'sandbox_inserted': True}
+child insert response: {'type': 'insert_result', 'value_inserted': True, 'sandbox_inserted': False}
+failed extension response: {'type': 'insert_result', 'value_inserted': False, 'sandbox_inserted': False}
+find child response: {'type': 'find_result', 'value': 'value\nwith newline', 'sandbox_path': ['tool\nparent'], 'sandbox_id': 'sandbox-1'}
+missing response: {'type': 'find_result', 'value': None, 'sandbox_path': None, 'sandbox_id': None}
+dump all response: json

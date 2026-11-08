@@ -1,0 +1,48 @@
+[
+  {
+    "check": "protocol",
+    "exit_code": 0,
+    "elapsed_seconds": 0.17104160704184324,
+    "command": [
+      "test_client.py"
+    ]
+  },
+  {
+    "check": "sandbox-lifecycle",
+    "exit_code": 1,
+    "elapsed_seconds": 15.945320722996257,
+    "command": [
+      "test_sandbox_lifecycle.py"
+    ]
+  },
+  {
+    "check": "tvclient",
+    "exit_code": 1,
+    "elapsed_seconds": 0.425100906053558,
+    "command": [
+      "test_tvclient.py"
+    ]
+  },
+  {
+    "check": "ttl",
+    "exit_code": 0,
+    "elapsed_seconds": 5.557524046045728,
+    "command": [
+      "test_ttl_eviction.py"
+    ]
+  },
+  {
+    "check": "watermark",
+    "exit_code": 0,
+    "elapsed_seconds": 15.64508767100051,
+    "command": [
+      "test_eviction.py"
+    ]
+  },
+  {
+    "check": "load-32",
+    "exit_code": 0,
+    "build_workers": 8,
+    "evidence": "load-32.log completed with assertions enabled"
+  }
+]

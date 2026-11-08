@@ -1,0 +1,94 @@
+[
+  {
+    "workload": "balanced",
+    "events": 9613,
+    "unique_nodes": 744,
+    "rollouts": 1000,
+    "uncached_tool_time_ms": 4877247.52337731,
+    "uncached_tool_cost_usd": 7.59268257,
+    "repeat_accesses": 8869,
+    "repeat_fraction": 0.922604805991886,
+    "repeat_tool_time_ms": 4472318.22004687,
+    "repeat_tool_cost_usd": 6.94125311,
+    "unique_tasks_observed": 24,
+    "read_only_nodes": 204,
+    "snapshot_candidate_nodes": 262,
+    "unique_cache_entry_bytes": 9982756,
+    "unique_external_snapshot_bytes": 3695908715,
+    "valid": true,
+    "sha256_verified": [
+      "events.jsonl",
+      "nodes.jsonl",
+      "summary.json"
+    ]
+  },
+  {
+    "workload": "expensive_reuse",
+    "events": 9235,
+    "unique_nodes": 498,
+    "rollouts": 1000,
+    "uncached_tool_time_ms": 75347689.53590049,
+    "uncached_tool_cost_usd": 122.52124429,
+    "repeat_accesses": 8737,
+    "repeat_fraction": 0.9460747157552788,
+    "repeat_tool_time_ms": 71574509.92728436,
+    "repeat_tool_cost_usd": 115.64666934,
+    "unique_tasks_observed": 23,
+    "read_only_nodes": 128,
+    "snapshot_candidate_nodes": 171,
+    "unique_cache_entry_bytes": 7261687,
+    "unique_external_snapshot_bytes": 2636323895,
+    "valid": true,
+    "sha256_verified": [
+      "events.jsonl",
+      "nodes.jsonl",
+      "summary.json"
+    ]
+  },
+  {
+    "workload": "popularity_shift",
+    "events": 10575,
+    "unique_nodes": 844,
+    "rollouts": 1000,
+    "uncached_tool_time_ms": 4593782.74928671,
+    "uncached_tool_cost_usd": 9.4792135,
+    "repeat_accesses": 9731,
+    "repeat_fraction": 0.9201891252955082,
+    "repeat_tool_time_ms": 4159294.45479684,
+    "repeat_tool_cost_usd": 8.821880499999999,
+    "unique_tasks_observed": 21,
+    "read_only_nodes": 217,
+    "snapshot_candidate_nodes": 309,
+    "unique_cache_entry_bytes": 10300819,
+    "unique_external_snapshot_bytes": 4771173699,
+    "valid": true,
+    "sha256_verified": [
+      "events.jsonl",
+      "nodes.jsonl",
+      "summary.json"
+    ]
+  },
+  {
+    "workload": "memory_pressure",
+    "events": 10165,
+    "unique_nodes": 1407,
+    "rollouts": 1000,
+    "uncached_tool_time_ms": 6018660.55094299,
+    "uncached_tool_cost_usd": 7.73146993,
+    "repeat_accesses": 8758,
+    "repeat_fraction": 0.861583866207575,
+    "repeat_tool_time_ms": 5250409.8666329505,
+    "repeat_tool_cost_usd": 6.54025928,
+    "unique_tasks_observed": 23,
+    "read_only_nodes": 368,
+    "snapshot_candidate_nodes": 870,
+    "unique_cache_entry_bytes": 1384828873,
+    "unique_external_snapshot_bytes": 130187712937,
+    "valid": true,
+    "sha256_verified": [
+      "events.jsonl",
+      "nodes.jsonl",
+      "summary.json"
+    ]
+  }
+]

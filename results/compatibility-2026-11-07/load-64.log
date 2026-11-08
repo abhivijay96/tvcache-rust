@@ -1,0 +1,113 @@
+Starting load test: num_tasks=64 num_rollouts=[2, 4, 8, 16] total_rollouts=1920 depth=5 width=random(1..8) build_workers=32 seed=12345 prefix=compatibility-64
+compatibility-64-task-00: nodes=3677 sandboxes=921 valid_finds=3677
+compatibility-64-task-01: nodes=995 sandboxes=255 valid_finds=995
+compatibility-64-task-02: nodes=1693 sandboxes=431 valid_finds=1693
+compatibility-64-task-03: nodes=693 sandboxes=157 valid_finds=693
+compatibility-64-task-04: nodes=3554 sandboxes=867 valid_finds=3554
+compatibility-64-task-05: nodes=260 sandboxes=63 valid_finds=260
+compatibility-64-task-06: nodes=1523 sandboxes=371 valid_finds=1523
+compatibility-64-task-07: nodes=1444 sandboxes=352 valid_finds=1444
+compatibility-64-task-08: nodes=1955 sandboxes=494 valid_finds=1955
+compatibility-64-task-09: nodes=2485 sandboxes=564 valid_finds=2485
+compatibility-64-task-10: nodes=875 sandboxes=216 valid_finds=875
+compatibility-64-task-11: nodes=4218 sandboxes=1125 valid_finds=4218
+compatibility-64-task-12: nodes=3881 sandboxes=934 valid_finds=3881
+compatibility-64-task-13: nodes=2897 sandboxes=696 valid_finds=2897
+compatibility-64-task-14: nodes=3175 sandboxes=774 valid_finds=3175
+compatibility-64-task-15: nodes=3434 sandboxes=862 valid_finds=3434
+compatibility-64-task-16: nodes=566 sandboxes=137 valid_finds=566
+compatibility-64-task-17: nodes=1192 sandboxes=309 valid_finds=1192
+compatibility-64-task-18: nodes=759 sandboxes=200 valid_finds=759
+compatibility-64-task-19: nodes=3967 sandboxes=971 valid_finds=3967
+compatibility-64-task-20: nodes=3086 sandboxes=757 valid_finds=3086
+compatibility-64-task-21: nodes=3674 sandboxes=880 valid_finds=3674
+compatibility-64-task-22: nodes=774 sandboxes=193 valid_finds=774
+compatibility-64-task-23: nodes=1529 sandboxes=386 valid_finds=1529
+compatibility-64-task-24: nodes=1073 sandboxes=261 valid_finds=1073
+compatibility-64-task-25: nodes=2044 sandboxes=476 valid_finds=2044
+compatibility-64-task-26: nodes=2211 sandboxes=536 valid_finds=2211
+compatibility-64-task-27: nodes=526 sandboxes=127 valid_finds=526
+compatibility-64-task-28: nodes=1826 sandboxes=465 valid_finds=1826
+compatibility-64-task-29: nodes=3590 sandboxes=894 valid_finds=3590
+compatibility-64-task-30: nodes=2536 sandboxes=651 valid_finds=2536
+compatibility-64-task-31: nodes=610 sandboxes=136 valid_finds=610
+compatibility-64-task-32: nodes=1181 sandboxes=308 valid_finds=1181
+compatibility-64-task-33: nodes=422 sandboxes=108 valid_finds=422
+compatibility-64-task-34: nodes=3947 sandboxes=950 valid_finds=3947
+compatibility-64-task-35: nodes=3473 sandboxes=905 valid_finds=3473
+compatibility-64-task-36: nodes=561 sandboxes=126 valid_finds=561
+compatibility-64-task-37: nodes=454 sandboxes=121 valid_finds=454
+compatibility-64-task-38: nodes=2335 sandboxes=570 valid_finds=2335
+compatibility-64-task-39: nodes=624 sandboxes=184 valid_finds=624
+compatibility-64-task-40: nodes=1498 sandboxes=357 valid_finds=1498
+compatibility-64-task-41: nodes=3782 sandboxes=969 valid_finds=3782
+compatibility-64-task-42: nodes=2090 sandboxes=534 valid_finds=2090
+compatibility-64-task-43: nodes=3835 sandboxes=920 valid_finds=3835
+compatibility-64-task-44: nodes=2643 sandboxes=648 valid_finds=2643
+compatibility-64-task-45: nodes=4162 sandboxes=1028 valid_finds=4162
+compatibility-64-task-46: nodes=1862 sandboxes=437 valid_finds=1862
+compatibility-64-task-47: nodes=1796 sandboxes=444 valid_finds=1796
+compatibility-64-task-48: nodes=2443 sandboxes=627 valid_finds=2443
+compatibility-64-task-49: nodes=2000 sandboxes=520 valid_finds=2000
+compatibility-64-task-50: nodes=3243 sandboxes=815 valid_finds=3243
+compatibility-64-task-51: nodes=2761 sandboxes=659 valid_finds=2761
+compatibility-64-task-52: nodes=5194 sandboxes=1280 valid_finds=5194
+compatibility-64-task-53: nodes=1965 sandboxes=500 valid_finds=1965
+compatibility-64-task-54: nodes=2996 sandboxes=723 valid_finds=2996
+compatibility-64-task-55: nodes=2605 sandboxes=636 valid_finds=2605
+compatibility-64-task-56: nodes=1971 sandboxes=485 valid_finds=1971
+compatibility-64-task-57: nodes=1588 sandboxes=361 valid_finds=1588
+compatibility-64-task-58: nodes=5473 sandboxes=1388 valid_finds=5473
+compatibility-64-task-59: nodes=301 sandboxes=77 valid_finds=301
+compatibility-64-task-60: nodes=1605 sandboxes=410 valid_finds=1605
+compatibility-64-task-61: nodes=562 sandboxes=145 valid_finds=562
+compatibility-64-task-62: nodes=2757 sandboxes=700 valid_finds=2757
+compatibility-64-task-63: nodes=2908 sandboxes=718 valid_finds=2908
+TCG creation complete
+  tasks: 64
+  inserted nodes: 141759
+  inserted sandboxes: 35114
+  elapsed seconds: 352.97
+  inserts/sec: 401.62
+Starting rollout find phase: num_rollouts=2
+Rollout find phase complete
+  num_rollouts: 2
+  async_tasks: 128
+  finds: 128
+  mean rct ms: 9.20
+  median rct ms: 9.31
+  p95 rct ms: 16.44
+  elapsed seconds: 0.05
+  finds/sec: 2724.36
+Starting rollout find phase: num_rollouts=4
+Rollout find phase complete
+  num_rollouts: 4
+  async_tasks: 256
+  finds: 256
+  mean rct ms: 15.59
+  median rct ms: 16.28
+  p95 rct ms: 19.19
+  elapsed seconds: 0.07
+  finds/sec: 3871.37
+Starting rollout find phase: num_rollouts=8
+Rollout find phase complete
+  num_rollouts: 8
+  async_tasks: 512
+  finds: 512
+  mean rct ms: 34.78
+  median rct ms: 34.10
+  p95 rct ms: 42.98
+  elapsed seconds: 0.15
+  finds/sec: 3390.28
+Starting rollout find phase: num_rollouts=16
+Rollout find phase complete
+  num_rollouts: 16
+  async_tasks: 1024
+  finds: 1024
+  mean rct ms: 74.24
+  median rct ms: 75.99
+  p95 rct ms: 90.66
+  elapsed seconds: 0.51
+  finds/sec: 2024.34
+Total rollouts complete: 1920
+Load test complete

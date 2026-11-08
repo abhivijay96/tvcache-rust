@@ -1,0 +1,12 @@
+{
+  "caption": "Paper source: arxiv.org/html/2602.10986v1, \u00a7\u00a74.1\u20134.3 / Table 2. Values are transcribed summaries, not raw samples.\nDifferent workloads and estimators: contextual panels only. Local total-work speedup is NOT the paper's median tool-call speedup.",
+  "input_directory": "/mnt/s/Projects/tvcache-rust/results/compatibility-2026-11-07",
+  "mode": "rust, snapshots off",
+  "sources_sha256": {
+    "/mnt/s/Projects/tvcache-rust/results/compatibility-2026-11-07/summary.csv": "5b348dc22095aa1ebcf3c36d271f832acf25eb1b53120f82f21cb57a85b488b5",
+    "/mnt/s/Projects/tvcache-rust/results/compatibility-2026-11-07/validation.json": "a03d82be26ed9c936e1ac9156dc7a523a3902642932393317769b6076e585e6d",
+    "/mnt/s/Projects/tvcache-rust/results/compatibility-2026-11-07/run.json": "872607b48661581d64e0ce7df09bdee61f67015734f5c7690f086d6c8245971e",
+    "/mnt/s/Projects/tvcache-rust/results/compatibility-2026-11-07/load-summary.csv": "7c8e100cd3c152666b8954499f66cce342c196aa7673ffc97ed026318b1ee760",
+    "/mnt/s/Projects/tvcache-rust/scripts/plots/references/tvcache-v1/workloads.csv": "c6ffd5adfd3a139ca893795dba621e97aba513993df0605b5a8f6b9fba455a78"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "complete": true,
+  "runs": 288,
+  "rust_runs": 144,
+  "python_reference_runs": 144,
+  "checks": [
+    "trace hashes and causal features",
+    "decision residency and budgets",
+    "Rust full-entry peak/final bytes",
+    "hit and gross savings agreement",
+    "zero-budget and no-cache controls",
+    "full-capacity repeat ceiling"
+  ]
+}

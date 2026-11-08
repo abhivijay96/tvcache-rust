@@ -1,0 +1,102 @@
+[
+  {
+    "workload": "repeated",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 12,
+    "valid": true
+  },
+  {
+    "workload": "repeated",
+    "budget_bytes": 3072,
+    "hits": 8,
+    "requests": 12,
+    "valid": true
+  },
+  {
+    "workload": "branching",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 13,
+    "valid": true
+  },
+  {
+    "workload": "branching",
+    "budget_bytes": 3136,
+    "hits": 6,
+    "requests": 13,
+    "valid": true
+  },
+  {
+    "workload": "unique_tasks",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 16,
+    "valid": true
+  },
+  {
+    "workload": "unique_tasks",
+    "budget_bytes": 4096,
+    "hits": 0,
+    "requests": 16,
+    "valid": true
+  },
+  {
+    "workload": "cost_tradeoff",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 6,
+    "valid": true
+  },
+  {
+    "workload": "cost_tradeoff",
+    "budget_bytes": 3264,
+    "hits": 4,
+    "requests": 6,
+    "valid": true
+  },
+  {
+    "workload": "workload_shift",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 15,
+    "valid": true
+  },
+  {
+    "workload": "workload_shift",
+    "budget_bytes": 1920,
+    "hits": 12,
+    "requests": 15,
+    "valid": true
+  },
+  {
+    "workload": "oversized",
+    "budget_bytes": 0,
+    "hits": 0,
+    "requests": 4,
+    "valid": true
+  },
+  {
+    "workload": "oversized",
+    "budget_bytes": 32896,
+    "hits": 2,
+    "requests": 4,
+    "valid": true
+  },
+  {
+    "workload": "oversized",
+    "budget_bytes": 64,
+    "hits": 1,
+    "peak_bytes": 64,
+    "requests": 4,
+    "valid": true
+  },
+  {
+    "workload": "repeated",
+    "budget_bytes": 1024,
+    "hits": 8,
+    "peak_bytes": 1024,
+    "requests": 12,
+    "valid": true
+  }
+]
